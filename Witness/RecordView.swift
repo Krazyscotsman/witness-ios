@@ -13,6 +13,7 @@ struct RecordView: View {
 
     enum Mode: String, CaseIterable { case speak = "Speak", type = "Type" }
     @StateObject private var recorder = AudioRecorder()
+    @StateObject private var audioPlayer = AudioPlayer()
 
     @State private var mode: Mode = .speak
     @State private var title = ""
@@ -199,6 +200,12 @@ struct RecordView: View {
             Text("\(companion) is finding its shape.")
                 .font(.system(size: 16)).foregroundStyle(WT.ink.opacity(0.6))
                 .multilineTextAlignment(.center)
+
+            if recorder.lastRecordingURL != nil {
+                playbackBar
+                    .padding(.top, 6)
+            }
+
             Spacer()
             Button { dismiss() } label: {
                 Text("Done")
@@ -210,11 +217,56 @@ struct RecordView: View {
             .padding(.horizontal, 24).padding(.bottom, 24)
         }
         .padding(.horizontal, 24)
+        .onAppear {
+            if let url = recorder.lastRecordingURL { audioPlayer.load(url) }
+        }
+        .onDisappear { audioPlayer.stop() }
+    }
+
+    // Compact playback for the just-recorded memo (saved state only).
+    private var playbackBar: some View {
+        HStack(spacing: 14) {
+            Button { togglePlayback() } label: {
+                ZStack {
+                    Circle().fill(WV.teal)
+                    Image(systemName: audioPlayer.isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 18, weight: .bold)).foregroundStyle(.white)
+                }
+                .frame(width: 52, height: 52)
+            }
+            .witnessPress()
+
+            VStack(spacing: 6) {
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(WT.ink.opacity(0.1))
+                        Capsule().fill(WV.teal)
+                            .frame(width: max(0, geo.size.width * audioPlayer.progress))
+                    }
+                }
+                .frame(height: 6)
+
+                HStack {
+                    Text(mmss(audioPlayer.currentTime))
+                    Spacer()
+                    Text(mmss(audioPlayer.duration))
+                }
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(WT.ink.opacity(0.5))
+            }
+        }
     }
 
     // MARK: Actions
     private func togglePause() {
         if recorder.isPaused { recorder.resumeRecording() } else { recorder.pauseRecording() }
+    }
+    private func togglePlayback() {
+        if audioPlayer.isPlaying { audioPlayer.pause() } else { audioPlayer.play() }
+    }
+    private func mmss(_ t: TimeInterval) -> String {
+        let s = Int(t.rounded(.down))
+        return String(format: "%01d:%02d", s / 60, s % 60)
     }
     private func cancelRecording() { recorder.cancelRecording() }
     private func stopRecording() {
