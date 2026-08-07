@@ -1,5 +1,5 @@
 import SwiftUI
-import Combine
+import UIKit
 
 // MARK: - Record: voice-first capture (design spec §3.3). Presented as a full-screen
 // cover from Home and Memories (Record is not a tab). Inert; endpoints noted:
@@ -12,16 +12,13 @@ struct RecordView: View {
     @AppStorage(Profile.companionNameKey) private var companion: String = Profile.defaultCompanionName
 
     enum Mode: String, CaseIterable { case speak = "Speak", type = "Type" }
+    @StateObject private var recorder = AudioRecorder()
+
     @State private var mode: Mode = .speak
-    @State private var recording = false
-    @State private var paused = false
-    @State private var elapsed = 0
     @State private var title = ""
     @State private var dateText = ""
     @State private var bodyText = ""
     @State private var saved = false
-
-    private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
         ZStack {
@@ -31,7 +28,7 @@ struct RecordView: View {
             } else {
                 VStack(spacing: 0) {
                     topBar
-                    if !recording {
+                    if !recorder.isRecording {
                         ModeSwitcher(selection: $mode)
                             .padding(.horizontal, 24)
                             .padding(.top, 10)
@@ -40,7 +37,16 @@ struct RecordView: View {
                 }
             }
         }
-        .onReceive(timer) { _ in if recording && !paused { elapsed += 1 } }
+        .alert("Microphone Access Needed", isPresented: $recorder.permissionDenied) {
+            Button("Open Settings") {
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(url)
+                }
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Allow microphone access in Settings to record a voice memory.")
+        }
     }
 
     // MARK: Top bar
@@ -65,7 +71,7 @@ struct RecordView: View {
     // MARK: Speak mode
     private var speakMode: some View {
         VStack(spacing: 0) {
-            if !recording {
+            if !recorder.isRecording {
                 VStack(spacing: 12) {
                     field("Title (optional)", text: $title)
                     field("When was this? (optional)", text: $dateText, hint: "“April 1993”, or “when I was 16.”")
@@ -76,24 +82,24 @@ struct RecordView: View {
 
             Spacer()
 
-            Text(recording ? timeString : "Tell me about a moment.")
-                .font(recording ? .system(size: 44, weight: .light, design: .monospaced) : .serif(26))
-                .foregroundStyle(recording ? WT.ink : WT.ink.opacity(0.7))
+            Text(recorder.isRecording ? timeString : "Tell me about a moment.")
+                .font(recorder.isRecording ? .system(size: 44, weight: .light, design: .monospaced) : .serif(26))
+                .foregroundStyle(recorder.isRecording ? WT.ink : WT.ink.opacity(0.7))
                 .contentTransition(.numericText())
-            Text(recording ? (paused ? "Paused" : "Listening…") : "Tap the mic and just talk. There's no wrong way.")
+            Text(recorder.isRecording ? (recorder.isPaused ? "Paused" : "Listening…") : "Tap the mic and just talk. There's no wrong way.")
                 .font(.system(size: 14)).foregroundStyle(WT.ink.opacity(0.45))
                 .padding(.top, 8)
 
             Spacer()
 
-            if recording {
+            if recorder.isRecording {
                 HStack(spacing: 28) {
-                    secondaryControl(paused ? "play.fill" : "pause.fill") { paused.toggle() }
+                    secondaryControl(recorder.isPaused ? "play.fill" : "pause.fill") { togglePause() }
                     micButton(systemName: "stop.fill") { stopRecording() }
                     secondaryControl("trash") { cancelRecording() }
                 }
             } else {
-                micButton(systemName: "mic.fill") { startRecording() }
+                micButton(systemName: "mic.fill") { recorder.startRecording() }
             }
 
             Spacer()
@@ -196,12 +202,14 @@ struct RecordView: View {
         .padding(.horizontal, 24)
     }
 
-    // MARK: Actions (inert; real endpoints noted)
-    private func startRecording() { elapsed = 0; paused = false; recording = true }
-    private func cancelRecording() { recording = false; paused = false; elapsed = 0 }
+    // MARK: Actions
+    private func togglePause() {
+        if recorder.isPaused { recorder.resumeRecording() } else { recorder.pauseRecording() }
+    }
+    private func cancelRecording() { recorder.cancelRecording() }
     private func stopRecording() {
-        // Real: write the audio file, then POST /memories/voice (multipart `file`, optional title/memory_date).
-        recording = false; paused = false
+        // Audio file is at recorder.lastRecordingURL; backend owns upload/transcription.
+        recorder.stopRecording()
         withAnimation { saved = true }
     }
     private func saveMemory() {
@@ -210,7 +218,8 @@ struct RecordView: View {
     }
 
     private var timeString: String {
-        String(format: "%01d:%02d", elapsed / 60, elapsed % 60)
+        let seconds = Int(recorder.elapsed)
+        return String(format: "%01d:%02d", seconds / 60, seconds % 60)
     }
 }
 

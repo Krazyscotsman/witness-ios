@@ -2,6 +2,12 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>NSCameraUsageDescription</key>
+	<string>Witness uses the camera so you can capture a photo or video for a memory.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Witness uses the microphone to record your spoken memories.</string>
+	<key>CFBundleIdentifier</key>
+	<string></string>
 	<key>UIAppFonts</key>
 	<array>
 		<string> PlayfairDisplay-SemiBold.ttf</string>
