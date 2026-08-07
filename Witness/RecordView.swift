@@ -47,6 +47,11 @@ struct RecordView: View {
         } message: {
             Text("Allow microphone access in Settings to record a voice memory.")
         }
+        .onChange(of: recorder.isRecording) { _, isRecording in
+            // Firm cue only when capture truly begins (after permission + record()),
+            // never on the button touch. The stop cue fires in stopRecording().
+            if isRecording { Haptics.recordStart() }
+        }
     }
 
     // MARK: Top bar
@@ -93,9 +98,14 @@ struct RecordView: View {
             Spacer()
 
             if recorder.isRecording {
-                HStack(spacing: 28) {
+                HStack(spacing: 42) {
                     secondaryControl(recorder.isPaused ? "play.fill" : "pause.fill") { togglePause() }
-                    micButton(systemName: "stop.fill") { stopRecording() }
+                    ZStack {
+                        LevelPulse(level: recorder.level)
+                        micButton(systemName: "stop.fill") { stopRecording() }
+                            .scaleEffect(1.0 + 0.06 * recorder.level)
+                            .animation(.easeOut(duration: 0.22), value: recorder.level)
+                    }
                     secondaryControl("trash") { cancelRecording() }
                 }
             } else {
@@ -209,6 +219,7 @@ struct RecordView: View {
     private func cancelRecording() { recorder.cancelRecording() }
     private func stopRecording() {
         // Audio file is at recorder.lastRecordingURL; backend owns upload/transcription.
+        Haptics.recordStop()
         recorder.stopRecording()
         withAnimation { saved = true }
     }
@@ -254,5 +265,27 @@ private struct ModeSwitcher: View {
         }
         .padding(4)
         .background(WT.ink.opacity(0.06), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+}
+
+// MARK: - Live input-level pulse (breathes around the stop button, driven by recorder.level).
+private struct LevelPulse: View {
+    var level: Double   // 0…1; eased by the parent's .animation on recorder.level
+
+    var body: some View {
+        ZStack {
+            ring(scaleBoost: 0.525, base: 0.05, gain: 0.12)  // outer: larger, fainter (1.25×)
+            ring(scaleBoost: 0.275, base: 0.09, gain: 0.20)  // inner: tighter, stronger (1.25×)
+        }
+        .animation(.easeOut(duration: 0.22), value: level)
+        .allowsHitTesting(false)
+    }
+
+    private func ring(scaleBoost: CGFloat, base: Double, gain: Double) -> some View {
+        Circle()
+            .stroke(WV.teal, lineWidth: 2)
+            .frame(width: 120, height: 120)
+            .scaleEffect(1.0 + scaleBoost * CGFloat(level))
+            .opacity(base + gain * level)
     }
 }

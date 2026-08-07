@@ -95,6 +95,14 @@ enum Haptics {
         let g = UIImpactFeedbackGenerator(style: .light)
         g.impactOccurred()
     }
+    static func recordStart() {
+        let g = UIImpactFeedbackGenerator(style: .heavy)
+        g.impactOccurred()
+    }
+    static func recordStop() {
+        let g = UIImpactFeedbackGenerator(style: .medium)
+        g.impactOccurred()
+    }
     static func success() {
         UINotificationFeedbackGenerator().notificationOccurred(.success)
     }
