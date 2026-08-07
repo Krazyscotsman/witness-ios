@@ -51,7 +51,10 @@ private struct WitnessTabBar: View {
         HStack(spacing: 0) {
             ForEach(MainTabView.Tab.allCases, id: \.self) { t in
                 let sel = (t == selection)
-                Button { selection = t } label: {
+                Button {
+                    if t != selection { Haptics.tap() }   // light tick only on an actual switch
+                    selection = t
+                } label: {
                     VStack(spacing: 5) {
                         Image(systemName: sel ? t.iconSelected : t.icon)
                             .font(.system(size: 26, weight: sel ? .semibold : .regular))

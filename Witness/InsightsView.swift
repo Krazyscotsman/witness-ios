@@ -19,7 +19,7 @@ struct InsightsView: View {
                     }
                     .padding(.horizontal, 24)
                     .padding(.top, 16)
-                    .padding(.bottom, 28)
+                    .padding(.bottom, 110)
                 }
             }
             .toolbar(.hidden, for: .navigationBar)

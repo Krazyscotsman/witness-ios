@@ -45,7 +45,7 @@ struct YouView: View {
                     }
                     .padding(.horizontal, 24)
                     .padding(.top, 24)
-                    .padding(.bottom, 28)
+                    .padding(.bottom, 110)
                 }
             }
             .toolbar(.hidden, for: .navigationBar)

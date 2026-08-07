@@ -52,8 +52,8 @@ struct OnboardingView: View {
                             .transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: 12)), removal: .opacity))
                             .id(step)
                     }
-                    bottomButton
                 }
+                .safeAreaInset(edge: .bottom) { bottomButton }
             }
         }
         .sheet(isPresented: $showDatePicker) { datePickerSheet }
@@ -294,7 +294,9 @@ struct OnboardingView: View {
             Spacer(minLength: 16)
 
             agreementCard.padding(.horizontal, 24)
-
+        }
+        .padding(.horizontal, 24)
+        .safeAreaInset(edge: .bottom) {
             Button {
                 // Real: POST /api/v1/settings/profile {first_name,last_name,birthdate,birthCity,
                 //   birthState, gender: gender.trimmed || nil, selectedVoice, companionName}
@@ -310,9 +312,8 @@ struct OnboardingView: View {
             }
             .witnessPress()
             .disabled(!allAgreed)
-            .padding(.horizontal, 24).padding(.bottom, 24)
+            .padding(.horizontal, 24).padding(.bottom, 10)
         }
-        .padding(.horizontal, 24)
         .sheet(item: $legalDoc) { LegalView(doc: $0) }
     }
 
@@ -365,7 +366,7 @@ struct OnboardingView: View {
         }
         .witnessPress()
         .disabled(!canAdvance)
-        .padding(.horizontal, 24).padding(.bottom, 20).padding(.top, 4)
+        .padding(.horizontal, 24).padding(.top, 4).padding(.bottom, 10)
     }
 
     // MARK: Logic (matches web canAdvance)

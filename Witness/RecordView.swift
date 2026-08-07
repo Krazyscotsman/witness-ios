@@ -162,7 +162,9 @@ struct RecordView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color.white, in: RoundedRectangle(cornerRadius: 16))
             .overlay(RoundedRectangle(cornerRadius: 16).stroke(WT.ink.opacity(0.12), lineWidth: 1))
-
+        }
+        .padding(.horizontal, 24).padding(.top, 16).padding(.bottom, 8)
+        .safeAreaInset(edge: .bottom) {
             Button { saveMemory() } label: {
                 Text("Save memory")
                     .font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
@@ -172,8 +174,8 @@ struct RecordView: View {
             }
             .witnessPress()
             .disabled(bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .padding(.horizontal, 24).padding(.bottom, 10)
         }
-        .padding(.horizontal, 24).padding(.top, 16).padding(.bottom, 16)
     }
 
     private func field(_ placeholder: String, text: Binding<String>, hint: String? = nil) -> some View {
@@ -207,6 +209,9 @@ struct RecordView: View {
             }
 
             Spacer()
+        }
+        .padding(.horizontal, 24)
+        .safeAreaInset(edge: .bottom) {
             Button { dismiss() } label: {
                 Text("Done")
                     .font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
@@ -214,9 +219,8 @@ struct RecordView: View {
                     .background(WV.teal, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             }
             .witnessPress()
-            .padding(.horizontal, 24).padding(.bottom, 24)
+            .padding(.horizontal, 24).padding(.bottom, 10)
         }
-        .padding(.horizontal, 24)
         .onAppear {
             if let url = recorder.lastRecordingURL { audioPlayer.load(url) }
         }
