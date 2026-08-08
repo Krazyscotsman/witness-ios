@@ -315,6 +315,14 @@ struct RecordView: View {
         // Audio file is at recorder.lastRecordingURL; backend owns upload/transcription.
         Haptics.recordStop()
         recorder.stopRecording()
+        // Register the finished recording with the in-session MediaStore the gallery reads,
+        // so it shows in "Recently added" as an audio item (gold waveform tile, distinct from
+        // photo tiles). Reuses MediaStore / CapturedMedia (kind: .audio). In-memory only —
+        // appears this session, not across relaunches (durable storage is backend-era, item 10).
+        if let url = recorder.lastRecordingURL {
+            MediaStore.shared.add(CapturedMedia(image: nil, kind: .audio, videoURL: nil,
+                                                fileName: url.lastPathComponent))
+        }
         withAnimation { saved = true }
     }
     private func saveMemory() {

@@ -7,8 +7,8 @@ import Combine
 // MARK: - Captured media held in memory for the session (until upload is wired).
 struct CapturedMedia: Identifiable {
     let id = UUID().uuidString
-    let image: UIImage          // a photo, or a video's thumbnail frame
-    let kind: MediaKind         // .image / .video
+    let image: UIImage?         // a photo, or a video's thumbnail frame; nil for audio (no frame)
+    let kind: MediaKind         // .image / .video / .audio
     let videoURL: URL?
     let fileName: String
 
