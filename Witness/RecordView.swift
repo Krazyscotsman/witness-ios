@@ -14,6 +14,7 @@ struct RecordView: View {
     enum Mode: String, CaseIterable { case speak = "Speak", type = "Type" }
     @StateObject private var recorder = AudioRecorder()
     @StateObject private var audioPlayer = AudioPlayer()
+    @StateObject private var transcriber = Transcriber()   // TEMP: item-3 engine validation
 
     @State private var mode: Mode = .speak
     @State private var title = ""
@@ -207,6 +208,9 @@ struct RecordView: View {
                 playbackBar
                     .padding(.top, 6)
             }
+            if recorder.lastRecordingURL != nil {
+                transcribeScaffold
+            }
 
             Spacer()
         }
@@ -224,7 +228,41 @@ struct RecordView: View {
         .onAppear {
             if let url = recorder.lastRecordingURL { audioPlayer.load(url) }
         }
-        .onDisappear { audioPlayer.stop() }
+        .onDisappear { audioPlayer.stop(); transcriber.cancel() }
+    }
+
+    // TEMP SCAFFOLD (item 3): validates the on-device Transcriber engine. NOT a shipped
+    // feature — remove once transcription is wired into the real flow.
+    private var transcribeScaffold: some View {
+        VStack(spacing: 8) {
+            Button {
+                if let url = recorder.lastRecordingURL { transcriber.transcribe(url: url) }
+            } label: {
+                Text(transcriber.isTranscribing ? "Transcribing…" : "Transcribe (temp)")
+                    .font(.system(size: 14, weight: .semibold)).foregroundStyle(WV.teal)
+                    .padding(.horizontal, 16).frame(height: 40)
+                    .background(WV.teal.opacity(0.12), in: Capsule())
+            }
+            .witnessPress()
+            .disabled(transcriber.isTranscribing)
+
+            Text("Engine: \(transcriber.stateDescription)")
+                .font(.system(size: 11)).foregroundStyle(WT.ink.opacity(0.45))
+                .multilineTextAlignment(.center)
+
+            if !transcriber.transcript.isEmpty {
+                ScrollView {
+                    Text(transcriber.transcript)
+                        .font(.system(size: 13)).foregroundStyle(WT.ink.opacity(0.8))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 120)
+                .padding(10)
+                .background(Color.white, in: RoundedRectangle(cornerRadius: 12))
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(WT.ink.opacity(0.1), lineWidth: 1))
+            }
+        }
+        .padding(.top, 10)
     }
 
     // Compact playback for the just-recorded memo (saved state only).
