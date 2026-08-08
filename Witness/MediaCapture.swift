@@ -25,6 +25,10 @@ struct CapturedMedia: Identifiable {
 
 // MARK: - Shared in-session store so capture from Memories OR the Gallery both show up.
 // Real: each captured asset -> POST /api/v1/memories/{memory_id}/media (multipart).
+// Orientation: captured UIImages carry correct .imageOrientation (EXIF), so in-app display
+// (SwiftUI Image) is already upright — no per-capture normalization needed. When the upload
+// path is wired (item 10), normalize the pixel buffer to .up before sending raw bytes, since
+// the backend / other tools may ignore EXIF orientation.
 final class MediaStore: ObservableObject {
     static let shared = MediaStore()
     @Published var captured: [CapturedMedia] = []
