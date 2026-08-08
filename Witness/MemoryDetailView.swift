@@ -6,6 +6,7 @@ struct MemoryDetailView: View {
     @AppStorage(Profile.companionNameKey) private var companion: String = Profile.defaultCompanionName
     @StateObject private var audioPlayer = AudioPlayer()
     @State private var audioURL: URL?
+    @State private var showAsk = false
 
     // Set true once a memory carries a real cover photo; sample memories have none.
     private var hasCoverPhoto: Bool { false }
@@ -41,7 +42,7 @@ struct MemoryDetailView: View {
                     }
                     .padding(.horizontal, 24)
                     .padding(.top, hasCoverPhoto ? 6 : 22)
-                    .padding(.bottom, 64)   // clears the tab bar so Ask card is fully visible
+                    .padding(.bottom, 110)  // clears the tab bar so Ask card is fully visible
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
@@ -56,6 +57,12 @@ struct MemoryDetailView: View {
             if let url = audioURL { audioPlayer.load(url) }
         }
         .onDisappear { audioPlayer.stop() }
+        .sheet(isPresented: $showAsk) {
+            // Memory-scoped "Ask Scarlett" — opens TalkView about this memory.
+            // Passing the whole memory for its title (opening line) + id (session handoff);
+            // memory.id is a client-side UUID today → server memory id once wired.
+            TalkView(memory: memory)
+        }
     }
 
     // With a photo: a tall cover that dissolves into the page. Without: a slim, quiet
@@ -232,7 +239,7 @@ struct MemoryDetailView: View {
     }
 
     private var askCard: some View {
-        Button { /* TODO: open Talk anchored to this memory */ } label: {
+        Button { showAsk = true } label: {
             HStack(spacing: 14) {
                 ZStack {
                     Circle().fill(Color.white.opacity(0.18))

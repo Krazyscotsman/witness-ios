@@ -8,6 +8,9 @@ import SwiftUI
 //   Auth: Bearer <keychain vivid_token>
 struct TalkView: View {
     @AppStorage(Profile.companionNameKey) private var companion: String = Profile.defaultCompanionName
+    // Memory-scoped "Ask Scarlett": nil = the standalone Talk tab (unchanged).
+    var memory: SampleMemory? = nil
+    @Environment(\.dismiss) private var dismiss
 
     @State private var messages: [ChatMessage] = []
     @State private var draft = ""
@@ -26,7 +29,13 @@ struct TalkView: View {
                 composer
             }
         }
-        .onAppear { if messages.isEmpty { messages = [ChatMessage(role: .companion, text: greetingText())] } }
+        .onAppear {
+            if messages.isEmpty { messages = [ChatMessage(role: .companion, text: openingText())] }
+            // PLACEHOLDER — backend already implements this; connect later:
+            //   POST /api/v1/jarvis/witness/sessions { memory_id: <server id> }
+            // Uses memory?.id (client-side UUID today; becomes the server memory id once
+            // memories load from the backend). No network call here yet.
+        }
         .sheet(isPresented: $showAnchorGate) { anchorGate }
     }
 
@@ -178,6 +187,18 @@ struct TalkView: View {
     }
 
     // MARK: Logic
+    // Opening line: memory-scoped when launched from a memory's "Ask Scarlett", else the
+    // standalone Talk greeting. The real loop — Scarlett's questions, voice answers
+    // (record↔playback), transcription of both sides, transcript (text) storage, dedup so a
+    // question is never re-asked, and knowledge-graph enrichment — all live on the backend
+    // and connect later. This is the front-end shell only.
+    private func openingText() -> String {
+        if let memory {
+            return "Let's talk about “\(memory.title).” What comes back to you when you return to it?"
+        }
+        return greetingText()
+    }
+
     private func greetingText() -> String {
         let h = Calendar.current.component(.hour, from: Date())
         let when: String
@@ -231,6 +252,7 @@ struct TalkView: View {
         thinking = false
         gateUsed = false
         withAnimation { messages = [ChatMessage(role: .companion, text: greetingText())] }
+        dismiss()   // dismisses the memory-scoped sheet; no-op when this is the Talk tab
     }
 }
 
