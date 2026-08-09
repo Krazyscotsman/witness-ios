@@ -25,7 +25,7 @@ struct MemoriesView: View {
             }
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: MemoryDTO.self) { dto in
-                MemoryDetailView(memory: SampleMemory(dto))   // TEMP adapter (see extension below)
+                MemoryDetailView(listItem: dto, auth: auth)   // fetches /detail by dto.id
             }
         }
         .task { await vm.load(auth: auth) }        // fetch-once (VM guards)
@@ -204,62 +204,4 @@ enum MemoryFormat {
         }
         return out.string(from: d)
     }
-}
-
-// TEMPORARY bridge: adapts a real MemoryDTO into the sample-shaped MemoryDetailView so tapping a
-// card still opens detail. It fabricates kind/wordCount/texture (not in the list payload) —
-// acceptable ONLY because MemoryDetailView is being rewired to GET /api/v1/memories/{id}/detail as
-// the immediate next step, at which point this adapter is deleted. NOT a permanent mapping.
-extension SampleMemory {
-    init(_ dto: MemoryDTO) {
-        self.init(
-            title: dto.title ?? "Untitled memory",
-            excerpt: dto.narrativeSnippet ?? "",
-            date: MemoryFormat.date(dto),
-            kind: .text,                                   // fabricated: list payload has no media kind
-            people: dto.people ?? [],
-            narrative: dto.narrative ?? "",
-            wordCount: (dto.narrative ?? "").split { $0.isWhitespace }.count,   // fabricated
-            texture: dto.location ?? ""                    // fabricated (location stand-in)
-        )
-    }
-}
-
-struct SampleMemory: Identifiable, Hashable {
-    let id = UUID()
-    let title: String
-    let excerpt: String
-    let date: String
-    let kind: Kind
-    let people: [String]
-    let narrative: String
-    let wordCount: Int
-    let texture: String
-
-    enum Kind: Hashable {
-        case voice, text, photo
-        var icon: String {
-            switch self {
-            case .voice: return "waveform"; case .text: return "text.alignleft"; case .photo: return "photo"
-            }
-        }
-        var meta: String? {
-            switch self {
-            case .voice: return "Voice · 2:14"; case .text: return "Written"; case .photo: return "Photo"
-            }
-        }
-    }
-
-    static let sampleNarrative = "This is sample narrative text, shown so you can see how a memory reads in full — the serif body, the line spacing, the way the words sit on the page beneath the cover. Your own words, captured in your own voice, will fill this space once recording is wired."
-
-    static let samples: [SampleMemory] = [
-        .init(title: "The long drive home", excerpt: "Sample memory — the kind of moment Witness keeps. Real entries appear here once you start recording.",
-              date: "June 2026", kind: .voice, people: ["Sam", "Marie"], narrative: sampleNarrative, wordCount: 412, texture: "Warm · reflective"),
-        .init(title: "A quiet morning", excerpt: "Sample memory shown for layout. Your own words, in your own voice, will fill this space.",
-              date: "May 2026", kind: .text, people: ["Joan"], narrative: sampleNarrative, wordCount: 168, texture: "Calm · tender"),
-        .init(title: "The old back porch", excerpt: "Sample memory with a photo attached, to show how images sit alongside the story.",
-              date: "April 2026", kind: .photo, people: [], narrative: sampleNarrative, wordCount: 305, texture: "Nostalgic"),
-        .init(title: "First snow", excerpt: "Sample memory — placeholder text showing a second voice entry in the list.",
-              date: "January 2026", kind: .voice, people: ["Sam"], narrative: sampleNarrative, wordCount: 221, texture: "Quiet · still"),
-    ]
 }

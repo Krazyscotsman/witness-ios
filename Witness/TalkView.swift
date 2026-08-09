@@ -9,7 +9,7 @@ import SwiftUI
 struct TalkView: View {
     @AppStorage(Profile.companionNameKey) private var companion: String = Profile.defaultCompanionName
     // Memory-scoped "Ask Scarlett": nil = the standalone Talk tab (unchanged).
-    var memory: SampleMemory? = nil
+    var memory: MemoryDetailDTO? = nil
     @Environment(\.dismiss) private var dismiss
 
     @State private var messages: [ChatMessage] = []
@@ -194,7 +194,9 @@ struct TalkView: View {
     // and connect later. This is the front-end shell only.
     private func openingText() -> String {
         if let memory {
-            return "Let's talk about “\(memory.title).” What comes back to you when you return to it?"
+            let t = (memory.title ?? "").trimmingCharacters(in: .whitespaces)
+            let subject = t.isEmpty ? "this memory." : "“\(t).”"
+            return "Let's talk about \(subject) What comes back to you when you return to it?"
         }
         return greetingText()
     }

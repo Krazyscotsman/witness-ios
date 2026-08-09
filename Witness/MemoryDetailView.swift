@@ -1,16 +1,23 @@
 import SwiftUI
 
 struct MemoryDetailView: View {
-    let memory: SampleMemory
+    let listItem: MemoryDTO                       // from the list: id (to fetch) + instant header
+    @ObservedObject var auth: AuthManager
     @Environment(\.dismiss) private var dismiss
     @AppStorage(Profile.companionNameKey) private var companion: String = Profile.defaultCompanionName
+    @StateObject private var vm = MemoryDetailViewModel()
     @StateObject private var audioPlayer = AudioPlayer()
+    @StateObject private var speaker = Speaker()
     @State private var audioURL: URL?
     @State private var showAsk = false
-    @StateObject private var speaker = Speaker()
 
-    // Set true once a memory carries a real cover photo; sample memories have none.
+    // Set true once a memory carries a real cover photo; none today.
     private var hasCoverPhoto: Bool { false }
+
+    private var displayTitle: String { vm.detail?.title ?? listItem.title ?? "Untitled memory" }
+    private var displayDate: String { MemoryFormat.date(listItem) }
+    // Text spoken by Read aloud: the full narrative once loaded, else the list snippet.
+    private var spokenText: String { vm.detail?.narrative ?? listItem.narrativeSnippet ?? "" }
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -20,31 +27,16 @@ struct MemoryDetailView: View {
                 VStack(spacing: 0) {
                     cover
                     VStack(alignment: .leading, spacing: 18) {
-                        Text(memory.date.uppercased())
-                            .font(.system(size: 12, weight: .semibold)).tracking(1.5)
-                            .foregroundStyle(WV.gold)
-                        Text(memory.title)
-                            .font(.serif(30)).foregroundStyle(WT.ink)
-                            .fixedSize(horizontal: false, vertical: true)
-                        if !memory.people.isEmpty { peopleChips }
-                        Text(memory.narrative)
-                            .font(.serif(18)).foregroundStyle(WT.ink.opacity(0.85))
-                            .lineSpacing(7).fixedSize(horizontal: false, vertical: true)
-                        readAloudControl.padding(.top, 6)
-                        metadataRow.padding(.top, 2)
-                        actionsRow.padding(.top, 8)
-                        if audioURL != nil {
-                            listenPlayer.padding(.top, 12)
-                        } else {
-                            Text("No recording to play yet.")
-                                .font(.system(size: 13)).foregroundStyle(WT.ink.opacity(0.4))
-                                .padding(.top, 10)
+                        header
+                        switch vm.state {
+                        case .idle, .loading: loadingBlock
+                        case .failed(let m):  failedBlock(m)
+                        case .loaded:         loadedBody
                         }
-                        askCard.padding(.top, 4)
                     }
                     .padding(.horizontal, 24)
                     .padding(.top, hasCoverPhoto ? 6 : 22)
-                    .padding(.bottom, 110)  // clears the tab bar so Ask card is fully visible
+                    .padding(.bottom, 110)  // clears the tab bar so the Ask card is fully visible
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
@@ -54,21 +46,205 @@ struct MemoryDetailView: View {
         }
         .navigationBarBackButtonHidden(true)
         .toolbar(.hidden, for: .navigationBar)
+        .task { await vm.load(id: listItem.id, auth: auth) }
         .onAppear {
-            audioURL = resolveMemoryAudioURL(for: memory)
+            audioURL = resolveMemoryAudioURL()
             if let url = audioURL { audioPlayer.load(url) }
         }
         .onDisappear { audioPlayer.stop(); speaker.stop() }
         .sheet(isPresented: $showAsk) {
-            // Memory-scoped "Ask Scarlett" — opens TalkView about this memory.
-            // Passing the whole memory for its title (opening line) + id (session handoff);
-            // memory.id is a client-side UUID today → server memory id once wired.
-            TalkView(memory: memory)
+            // Memory-scoped "Ask Scarlett" — opens TalkView about this memory (real server id + title).
+            TalkView(memory: vm.detail)
         }
     }
 
-    // With a photo: a tall cover that dissolves into the page. Without: a slim, quiet
-    // band of color at the very top — a hint, not a slab.
+    // MARK: - Header (instant from the list item)
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(displayDate.uppercased())
+                .font(.system(size: 12, weight: .semibold)).tracking(1.5)
+                .foregroundStyle(WV.gold)
+            Text(displayTitle)
+                .font(.serif(30)).foregroundStyle(WT.ink)
+                .fixedSize(horizontal: false, vertical: true)
+            if let people = vm.detail?.people, !people.isEmpty { peopleChips(people) }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: - Loaded body
+
+    private var loadedBody: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            // Playback controls live ABOVE the narrative so they're reachable without scrolling a
+            // very large memory. Read aloud (on-device TTS of the written words) + the recording player.
+            readAloudControl
+            if audioURL != nil {
+                listenPlayer
+            } else {
+                Text("No recording to play yet.")
+                    .font(.system(size: 13)).foregroundStyle(WT.ink.opacity(0.4))
+            }
+
+            narrative
+
+            if let emotions = vm.detail?.emotions, !emotions.isEmpty { emotionsSection(emotions) }
+            if let quotes = vm.detail?.quotes, !quotes.isEmpty { quotesSection(quotes) }
+
+            askCard.padding(.top, 4)
+        }
+    }
+
+    // MARK: - Narrative (lazy, chunked — scales to any size, never blanks)
+
+    // The narrative is pre-split (off the main thread) into paragraph-sized chunks. Rendering them as
+    // individual Text views in a LazyVStack — with NO .fixedSize — means only near-viewport paragraphs
+    // are laid out, so even the densest (~174K-char) narrative renders and scrolls without blanking.
+    private var narrative: some View {
+        LazyVStack(alignment: .leading, spacing: 14) {
+            ForEach(Array(vm.paragraphs.enumerated()), id: \.offset) { _, para in
+                Text(para)
+                    .font(.serif(18)).foregroundStyle(WT.ink.opacity(0.85))
+                    .lineSpacing(7)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    // MARK: - Emotions
+
+    private func emotionsSection(_ items: [MemoryEmotion]) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionLabel("Emotions")
+            VStack(spacing: 10) {
+                ForEach(Array(items.enumerated()), id: \.offset) { _, e in
+                    emotionRow(e)
+                }
+            }
+        }
+        .padding(.top, 4)
+    }
+
+    private func emotionRow(_ e: MemoryEmotion) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                Image(systemName: "heart.fill").font(.system(size: 13)).foregroundStyle(WV.teal)
+                Text((e.emotionType ?? "—").capitalized)
+                    .font(.system(size: 15, weight: .semibold)).foregroundStyle(WT.ink.opacity(0.85))
+                Spacer(minLength: 8)
+                if let intensity = e.intensity { intensityDots(intensity) }
+            }
+            if let trigger = e.triggerDescription, !trigger.isEmpty {
+                Text(trigger)
+                    .font(.system(size: 13)).foregroundStyle(WT.ink.opacity(0.55))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(WV.card, in: RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(WT.ink.opacity(0.07), lineWidth: 1))
+    }
+
+    // Normalizes an intensity that may be 0–1 or 0–10 into five dots.
+    private func intensityDots(_ raw: Double) -> some View {
+        let scaled = raw <= 1.0 ? raw * 5.0 : raw / 2.0
+        let filled = max(0, min(5, Int(scaled.rounded())))
+        return HStack(spacing: 3) {
+            ForEach(0..<5, id: \.self) { i in
+                Circle()
+                    .fill(i < filled ? WV.teal : WT.ink.opacity(0.15))
+                    .frame(width: 6, height: 6)
+            }
+        }
+    }
+
+    // MARK: - Quotes
+
+    private func quotesSection(_ items: [MemoryQuote]) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionLabel("Quotes")
+            VStack(spacing: 10) {
+                ForEach(Array(items.enumerated()), id: \.offset) { _, q in
+                    quoteRow(q)
+                }
+            }
+        }
+        .padding(.top, 4)
+    }
+
+    @ViewBuilder
+    private func quoteRow(_ q: MemoryQuote) -> some View {
+        let text = (q.quoteText ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !text.isEmpty {
+            HStack(alignment: .top, spacing: 12) {
+                Rectangle().fill(WV.teal.opacity(0.5)).frame(width: 3)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("“\(text)”")
+                        .font(.serif(17)).italic().foregroundStyle(WT.ink.opacity(0.85))
+                        .lineSpacing(5).fixedSize(horizontal: false, vertical: true)
+                    if let attribution = quoteAttribution(q) {
+                        Text(attribution)
+                            .font(.system(size: 12, weight: .medium)).foregroundStyle(WT.ink.opacity(0.5))
+                    }
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(WV.card, in: RoundedRectangle(cornerRadius: 16))
+            .overlay(RoundedRectangle(cornerRadius: 16).stroke(WT.ink.opacity(0.07), lineWidth: 1))
+        }
+    }
+
+    private func quoteAttribution(_ q: MemoryQuote) -> String? {
+        var parts: [String] = []
+        if let s = q.speakerName, !s.isEmpty { parts.append("— \(s)") }
+        if let t = q.emotionalTone, !t.isEmpty { parts.append(t.capitalized) }
+        return parts.isEmpty ? nil : parts.joined(separator: "  ·  ")
+    }
+
+    // MARK: - Loading / failed
+
+    private var loadingBlock: some View {
+        VStack(spacing: 14) {
+            ProgressView().tint(WV.teal)
+            Text("Gathering this memory…")
+                .font(.system(size: 14)).foregroundStyle(WT.ink.opacity(0.5))
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 40)
+    }
+
+    private func failedBlock(_ message: String) -> some View {
+        VStack(spacing: 14) {
+            Image(systemName: "wifi.exclamationmark").font(.system(size: 32)).foregroundStyle(WT.ink.opacity(0.3))
+            Text("Couldn’t load this memory").font(.serif(22)).foregroundStyle(WV.teal)
+            Text(message)
+                .font(.system(size: 14)).foregroundStyle(WT.ink.opacity(0.55))
+                .multilineTextAlignment(.center).lineSpacing(3)
+                .fixedSize(horizontal: false, vertical: true).padding(.horizontal, 24)
+            Button { Task { await vm.retry(id: listItem.id, auth: auth) } } label: {
+                Text("Try again")
+                    .font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
+                    .padding(.horizontal, 24).frame(height: 50)
+                    .background(WV.teal, in: RoundedRectangle(cornerRadius: 16))
+            }
+            .witnessPress().padding(.top, 4)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 32)
+    }
+
+    // MARK: - Shared bits
+
+    private func sectionLabel(_ text: String) -> some View {
+        Text(text.uppercased())
+            .font(.system(size: 12, weight: .semibold)).tracking(1.5)
+            .foregroundStyle(WV.gold)
+    }
+
+    // With a photo: a tall cover that dissolves into the page. Without: a slim band of color.
     private var cover: some View {
         Group {
             if hasCoverPhoto {
@@ -119,60 +295,24 @@ struct MemoryDetailView: View {
             .shadow(color: WT.ink.opacity(0.12), radius: 5, y: 2)
     }
 
-    private var peopleChips: some View {
+    private func peopleChips(_ people: [MemoryPerson]) -> some View {
         FlowLayout(spacing: 8, lineSpacing: 8) {
-            ForEach(memory.people, id: \.self) { p in
-                HStack(spacing: 6) {
-                    Image(systemName: "person.fill").font(.system(size: 12)).foregroundStyle(WV.teal)
-                    Text(p).font(.system(size: 15, weight: .medium)).foregroundStyle(WT.ink.opacity(0.8))
-                        .lineLimit(1)
+            ForEach(Array(people.enumerated()), id: \.offset) { _, p in
+                let name = (p.canonicalName ?? "").trimmingCharacters(in: .whitespaces)
+                let anchor = p.isAnchor == true
+                if !name.isEmpty {
+                    HStack(spacing: 6) {
+                        Image(systemName: anchor ? "mappin.circle.fill" : "person.fill")
+                            .font(.system(size: 12)).foregroundStyle(anchor ? WV.gold : WV.teal)
+                        Text(name)
+                            .font(.system(size: 15, weight: .medium)).foregroundStyle(WT.ink.opacity(0.8))
+                            .lineLimit(1)
+                    }
+                    .padding(.horizontal, 13).padding(.vertical, 8)
+                    .background((anchor ? WV.gold : WV.teal).opacity(0.10), in: Capsule())
                 }
-                .padding(.horizontal, 13).padding(.vertical, 8)
-                .background(WV.teal.opacity(0.10), in: Capsule())
             }
         }
-    }
-
-    private var metadataRow: some View {
-        HStack(spacing: 18) {
-            metaItem("doc.text", "\(memory.wordCount) words")
-            metaItem("heart", memory.texture)
-        }
-    }
-    private func metaItem(_ icon: String, _ text: String) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: icon).font(.system(size: 12)).foregroundStyle(WT.ink.opacity(0.4))
-            Text(text).font(.system(size: 13)).foregroundStyle(WT.ink.opacity(0.5))
-        }
-    }
-
-    private var actionsRow: some View {
-        HStack(spacing: 10) {
-            actionChip(audioPlayer.isPlaying ? "pause.fill" : "speaker.wave.2.fill",
-                       audioPlayer.isPlaying ? "Pause" : "Listen") { toggleListen() }
-                .disabled(audioURL == nil)
-                .opacity(audioURL == nil ? 0.45 : 1)
-                .witnessHint("Play this memory's audio recording.")
-            actionChip("photo.badge.plus", "Add media") { /* TODO: POST /api/v1/memories/{id}/media */ }
-            actionChip("wand.and.stars", "Create image") { /* TODO: POST /visualize/{id} */ }
-        }
-    }
-    private func actionChip(_ icon: String, _ label: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(spacing: 8) {
-                ZStack {
-                    Circle().fill(WV.teal.opacity(0.12))
-                    Image(systemName: icon).font(.system(size: 20)).foregroundStyle(WV.teal)
-                }
-                .frame(width: 44, height: 44)
-                Text(label).font(.system(size: 13, weight: .medium)).foregroundStyle(WT.ink.opacity(0.75))
-            }
-            .frame(maxWidth: .infinity).frame(height: 96)
-            .background(WV.card, in: RoundedRectangle(cornerRadius: 18))
-            .overlay(RoundedRectangle(cornerRadius: 18).stroke(WT.ink.opacity(0.07), lineWidth: 1))
-            .shadow(color: WT.ink.opacity(0.06), radius: 8, y: 4)
-        }
-        .witnessPress()
     }
 
     // Compact playback bar (mirrors the saved-screen player). Shown when audio exists.
@@ -216,9 +356,8 @@ struct MemoryDetailView: View {
         else { speaker.stop(); audioPlayer.play() }   // stop Read-aloud so they don't overlap
     }
 
-    // Read aloud: speaks the memory's WRITTEN text via on-device TTS (system voice — branded
-    // voices are item 12). Distinct from "Listen", which plays the original audio recording.
-    // Tap toggles read → pause → resume.
+    // Read aloud: speaks the memory's WRITTEN text via on-device TTS. Distinct from "Listen"
+    // (original audio recording). Tap toggles read → pause → resume.
     private var readAloudControl: some View {
         Button { toggleReadAloud() } label: {
             HStack(spacing: 7) {
@@ -230,6 +369,8 @@ struct MemoryDetailView: View {
             .background(WV.teal.opacity(0.10), in: Capsule())
             .overlay(Capsule().stroke(WV.teal.opacity(0.25), lineWidth: 1))
         }
+        .disabled(spokenText.isEmpty)
+        .opacity(spokenText.isEmpty ? 0.45 : 1)
         .witnessPress()
         .witnessHint("Read this memory's written words aloud, on your device.")
     }
@@ -249,7 +390,7 @@ struct MemoryDetailView: View {
         else if speaker.isSpeaking { speaker.pause() }
         else {
             audioPlayer.stop()                // stop the recording player so they don't overlap
-            speaker.speak(memory.narrative)
+            speaker.speak(spokenText)
         }
     }
 
@@ -259,11 +400,9 @@ struct MemoryDetailView: View {
     }
 
     /// Resolves the audio to play for a memory.
-    /// PLACEHOLDER until GET /api/v1/memories/{id}/audio: the real implementation will
-    /// download the memory's audio from the backend using the memory's server id
-    /// (SampleMemory currently only has a client-side UUID, not a server id).
-    /// For now, play the most-recent local recording in Documents/Recordings/, or nil.
-    private func resolveMemoryAudioURL(for memory: SampleMemory) -> URL? {
+    /// PLACEHOLDER until GET /api/v1/memories/{id}/audio: for now, play the most-recent local
+    /// recording in Documents/Recordings/, or nil.
+    private func resolveMemoryAudioURL() -> URL? {
         let fm = FileManager.default
         guard let docs = fm.urls(for: .documentDirectory, in: .userDomainMask).first else { return nil }
         let dir = docs.appendingPathComponent("Recordings", isDirectory: true)
