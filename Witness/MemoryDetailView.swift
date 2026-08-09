@@ -7,6 +7,7 @@ struct MemoryDetailView: View {
     @StateObject private var audioPlayer = AudioPlayer()
     @State private var audioURL: URL?
     @State private var showAsk = false
+    @StateObject private var speaker = Speaker()
 
     // Set true once a memory carries a real cover photo; sample memories have none.
     private var hasCoverPhoto: Bool { false }
@@ -29,6 +30,7 @@ struct MemoryDetailView: View {
                         Text(memory.narrative)
                             .font(.serif(18)).foregroundStyle(WT.ink.opacity(0.85))
                             .lineSpacing(7).fixedSize(horizontal: false, vertical: true)
+                        readAloudControl.padding(.top, 6)
                         metadataRow.padding(.top, 2)
                         actionsRow.padding(.top, 8)
                         if audioURL != nil {
@@ -56,7 +58,7 @@ struct MemoryDetailView: View {
             audioURL = resolveMemoryAudioURL(for: memory)
             if let url = audioURL { audioPlayer.load(url) }
         }
-        .onDisappear { audioPlayer.stop() }
+        .onDisappear { audioPlayer.stop(); speaker.stop() }
         .sheet(isPresented: $showAsk) {
             // Memory-scoped "Ask Scarlett" — opens TalkView about this memory.
             // Passing the whole memory for its title (opening line) + id (session handoff);
@@ -209,7 +211,45 @@ struct MemoryDetailView: View {
 
     private func toggleListen() {
         guard audioURL != nil else { return }
-        if audioPlayer.isPlaying { audioPlayer.pause() } else { audioPlayer.play() }
+        if audioPlayer.isPlaying { audioPlayer.pause() }
+        else { speaker.stop(); audioPlayer.play() }   // stop Read-aloud so they don't overlap
+    }
+
+    // Read aloud: speaks the memory's WRITTEN text via on-device TTS (system voice — branded
+    // voices are item 12). Distinct from "Listen", which plays the original audio recording.
+    // Tap toggles read → pause → resume.
+    private var readAloudControl: some View {
+        Button { toggleReadAloud() } label: {
+            HStack(spacing: 7) {
+                Image(systemName: readAloudIcon).font(.system(size: 14, weight: .medium))
+                Text(readAloudLabel).font(.system(size: 14, weight: .medium))
+            }
+            .foregroundStyle(WV.teal)
+            .padding(.horizontal, 14).frame(height: 38)
+            .background(WV.teal.opacity(0.10), in: Capsule())
+            .overlay(Capsule().stroke(WV.teal.opacity(0.25), lineWidth: 1))
+        }
+        .witnessPress()
+        .witnessHint("Read this memory's written words aloud, on your device.")
+    }
+
+    private var readAloudIcon: String {
+        if speaker.isPaused { return "play.fill" }
+        if speaker.isSpeaking { return "pause.fill" }
+        return "text.bubble.fill"
+    }
+    private var readAloudLabel: String {
+        if speaker.isPaused { return "Resume" }
+        if speaker.isSpeaking { return "Pause" }
+        return "Read aloud"
+    }
+    private func toggleReadAloud() {
+        if speaker.isPaused { speaker.resume() }
+        else if speaker.isSpeaking { speaker.pause() }
+        else {
+            audioPlayer.stop()                // stop the recording player so they don't overlap
+            speaker.speak(memory.narrative)
+        }
     }
 
     private func mmss(_ t: TimeInterval) -> String {

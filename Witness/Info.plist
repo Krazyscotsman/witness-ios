@@ -4,6 +4,19 @@
 <dict>
 	<key>CFBundleIdentifier</key>
 	<string></string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>192.168.1.115</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+				<key>NSIncludesSubdomains</key>
+				<false/>
+			</dict>
+		</dict>
+	</dict>
 	<key>NSCameraUsageDescription</key>
 	<string>Witness uses the camera so you can capture a photo or video for a memory.</string>
 	<key>NSMicrophoneUsageDescription</key>

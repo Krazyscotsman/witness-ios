@@ -27,6 +27,7 @@ enum Profile {
 
 struct YouView: View {
     var onSignOut: () -> Void
+    @State private var showBackendTest = false   // TEMP (dev): backend pipe test
 
     @AppStorage(Profile.firstNameKey) private var firstName: String = ""
     @AppStorage(Profile.lastNameKey) private var lastName: String = ""
@@ -42,6 +43,10 @@ struct YouView: View {
                         NavigationLink { SettingsView() } label: { settingsRow }
                             .witnessPress()
                         signOutButton
+                        // TEMP (dev): opens the backend connection-test scratch view. Remove
+                        // once feature screens are wired to real data.
+                        Button("DEV · Backend test") { showBackendTest = true }
+                            .font(.system(size: 13, weight: .medium)).foregroundStyle(WT.ink.opacity(0.5))
                     }
                     .padding(.horizontal, 24)
                     .padding(.top, 24)
@@ -49,6 +54,7 @@ struct YouView: View {
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
+            .sheet(isPresented: $showBackendTest) { BackendTestView() }
         }
     }
 
