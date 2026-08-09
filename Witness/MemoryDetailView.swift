@@ -23,6 +23,7 @@ struct MemoryDetailView: View {
         ZStack(alignment: .top) {
             ParchmentBackground()
 
+            ScrollViewReader { proxy in
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 0) {
                     cover
@@ -41,6 +42,11 @@ struct MemoryDetailView: View {
                 }
             }
             .ignoresSafeArea(edges: .top)
+            .onChange(of: speaker.currentParagraph) { _, idx in
+                guard let idx else { return }
+                withAnimation(.easeInOut(duration: 0.4)) { proxy.scrollTo(Self.paraID(idx), anchor: .center) }
+            }
+            }
 
             topControls
         }
@@ -80,6 +86,7 @@ struct MemoryDetailView: View {
             // Playback controls live ABOVE the narrative so they're reachable without scrolling a
             // very large memory. Read aloud (on-device TTS of the written words) + the recording player.
             readAloudControl
+            if speaker.isSpeaking || speaker.isPaused { readAloudProgress }
             if audioURL != nil {
                 listenPlayer
             } else {
@@ -103,14 +110,20 @@ struct MemoryDetailView: View {
     // are laid out, so even the densest (~174K-char) narrative renders and scrolls without blanking.
     private var narrative: some View {
         LazyVStack(alignment: .leading, spacing: 14) {
-            ForEach(Array(vm.paragraphs.enumerated()), id: \.offset) { _, para in
+            ForEach(Array(vm.paragraphs.enumerated()), id: \.offset) { i, para in
                 Text(para)
                     .font(.serif(18)).foregroundStyle(WT.ink.opacity(0.85))
                     .lineSpacing(7)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 10).padding(.vertical, 6)
+                    .background(RoundedRectangle(cornerRadius: 10)
+                        .fill(speaker.currentParagraph == i ? WV.teal.opacity(0.10) : .clear))
+                    .id(Self.paraID(i))
+                    .animation(.easeInOut(duration: 0.25), value: speaker.currentParagraph)
             }
         }
     }
+    private static func paraID(_ i: Int) -> String { "para-\(i)" }
 
     // MARK: - Emotions
 
@@ -369,8 +382,8 @@ struct MemoryDetailView: View {
             .background(WV.teal.opacity(0.10), in: Capsule())
             .overlay(Capsule().stroke(WV.teal.opacity(0.25), lineWidth: 1))
         }
-        .disabled(spokenText.isEmpty)
-        .opacity(spokenText.isEmpty ? 0.45 : 1)
+        .disabled(vm.paragraphs.isEmpty && spokenText.isEmpty)
+        .opacity(vm.paragraphs.isEmpty && spokenText.isEmpty ? 0.45 : 1)
         .witnessPress()
         .witnessHint("Read this memory's written words aloud, on your device.")
     }
@@ -385,12 +398,30 @@ struct MemoryDetailView: View {
         if speaker.isSpeaking { return "Pause" }
         return "Read aloud"
     }
+    // Simple progress sense while reading: "Reading N of M" + a thin bar. Shown only during playback.
+    private var readAloudProgress: some View {
+        let n = (speaker.currentParagraph ?? 0) + 1
+        let m = max(speaker.paragraphCount, 1)
+        return VStack(alignment: .leading, spacing: 6) {
+            Text("Reading \(n) of \(m)")
+                .font(.system(size: 12, weight: .medium)).foregroundStyle(WT.ink.opacity(0.5))
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(WT.ink.opacity(0.1))
+                    Capsule().fill(WV.teal).frame(width: geo.size.width * CGFloat(n) / CGFloat(m))
+                }
+            }
+            .frame(height: 4)
+        }
+    }
+
     private func toggleReadAloud() {
         if speaker.isPaused { speaker.resume() }
         else if speaker.isSpeaking { speaker.pause() }
         else {
-            audioPlayer.stop()                // stop the recording player so they don't overlap
-            speaker.speak(spokenText)
+            audioPlayer.stop()                // mutual exclusion with the recording player
+            if !vm.paragraphs.isEmpty { speaker.speak(paragraphs: vm.paragraphs) }
+            else if !spokenText.isEmpty { speaker.speak(spokenText) }   // snippet before detail loads
         }
     }
 

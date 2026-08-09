@@ -1,3 +1,27 @@
+# Witness — Long-form read-aloud (chunked, resumable, chosen voice, follow-along) — Proposal
+
+Status: **PROPOSED — nothing applied. Awaiting approval.** No git. Accessibility requirement; must work on the
+~174K-char April 28, 1993 memory.
+
+## APIs verified (iOS 26 SDK, via DocumentationSearch)
+- `AVSpeechSynthesisVoice.gender: AVSpeechSynthesisVoiceGender` (.male/.female/.unspecified) ✓
+- `AVSpeechUtterance.postUtteranceDelay` / `preUtteranceDelay` ✓
+- Synthesizer maintains a queue; enqueue in order; pause resumes from paused point; stop removes remaining ✓
+- ⚠️ Enqueuing the SAME utterance twice throws → one fresh utterance per chunk ✓
+- `willSpeakRangeOfSpeechString` = per-word ranges (future word-level highlight seam; paragraph-level now)
+
+## Read-first findings
+- `Speaker.speak(_:)` builds ONE utterance from the whole string (the 174K truncation cause); voice via
+  `bestVoice()` uses locale+quality only and ignores `profile.voice`. Delegate flips isSpeaking/isPaused;
+  handleEnd() resets + deactivates session guarded by `!synthesizer.isSpeaking`.
+- `MemoryDetailView`: readAloudControl → toggleReadAloud() speaks `spokenText` (full narrative). Narrative =
+  `LazyVStack { ForEach(vm.paragraphs.enumerated) { Text } }`. listenPlayer.toggleListen() stops speaker
+  (mutual exclusion); onDisappear stops both. `MemoryDetailViewModel.paragraphs` = off-main ≤4000-char chunks.
+
+---
+
+## FULL proposed Speaker.swift (rewrite)
+```swift
 import AVFoundation
 import Combine
 
@@ -154,15 +178,13 @@ final class Speaker: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
         return AVSpeechSynthesisVoice(language: preferred) ?? AVSpeechSynthesisVoice(language: base)
     }
 
-    // MARK: - AVSpeechSynthesizerDelegate (callbacks may arrive off-main → marshal to @MainActor)
-
+    // MARK: Delegate (callbacks may arrive off-main → marshal to @MainActor)
     nonisolated func speechSynthesizer(_ s: AVSpeechSynthesizer, didStart utterance: AVSpeechUtterance) {
-        let key = ObjectIdentifier(utterance)   // hoist out: ObjectIdentifier is Sendable, the utterance isn't
         Task { @MainActor [weak self] in
             guard let self else { return }
             self.isSpeaking = true
             self.isPaused = false
-            if let i = self.indexForUtterance[key] { self.currentParagraph = i }
+            if let i = self.indexForUtterance[ObjectIdentifier(utterance)] { self.currentParagraph = i }
         }
     }
     nonisolated func speechSynthesizer(_ s: AVSpeechSynthesizer, didPause utterance: AVSpeechUtterance) {
@@ -190,3 +212,119 @@ final class Speaker: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
         deactivateSession()
     }
 }
+```
+
+---
+
+## MemoryDetailView.swift — diffs
+
+### a) drive chunked speech + snippet fallback
+```diff
+     private func toggleReadAloud() {
+         if speaker.isPaused { speaker.resume() }
+         else if speaker.isSpeaking { speaker.pause() }
+         else {
+-            audioPlayer.stop()                // stop the recording player so they don't overlap
+-            speaker.speak(spokenText)
++            audioPlayer.stop()                // mutual exclusion with the recording player
++            if !vm.paragraphs.isEmpty { speaker.speak(paragraphs: vm.paragraphs) }
++            else if !spokenText.isEmpty { speaker.speak(spokenText) }   // snippet before detail loads
+         }
+     }
+```
+```diff
+-        .disabled(spokenText.isEmpty)
+-        .opacity(spokenText.isEmpty ? 0.45 : 1)
++        .disabled(vm.paragraphs.isEmpty && spokenText.isEmpty)
++        .opacity(vm.paragraphs.isEmpty && spokenText.isEmpty ? 0.45 : 1)
+```
+
+### b) follow-along highlight + scroll ids on the narrative
+```diff
+     private var narrative: some View {
+         LazyVStack(alignment: .leading, spacing: 14) {
+-            ForEach(Array(vm.paragraphs.enumerated()), id: \.offset) { _, para in
+-                Text(para)
+-                    .font(.serif(18)).foregroundStyle(WT.ink.opacity(0.85))
+-                    .lineSpacing(7)
+-                    .frame(maxWidth: .infinity, alignment: .leading)
++            ForEach(Array(vm.paragraphs.enumerated()), id: \.offset) { i, para in
++                Text(para)
++                    .font(.serif(18)).foregroundStyle(WT.ink.opacity(0.85))
++                    .lineSpacing(7)
++                    .frame(maxWidth: .infinity, alignment: .leading)
++                    .padding(.horizontal, 10).padding(.vertical, 6)
++                    .background(RoundedRectangle(cornerRadius: 10)
++                        .fill(speaker.currentParagraph == i ? WV.teal.opacity(0.10) : .clear))
++                    .id(Self.paraID(i))
++                    .animation(.easeInOut(duration: 0.25), value: speaker.currentParagraph)
+             }
+         }
+     }
++    private static func paraID(_ i: Int) -> String { "para-\(i)" }
+```
+
+### c) wrap the page ScrollView in ScrollViewReader + auto-scroll the spoken paragraph
+```diff
+-            ScrollView(showsIndicators: false) {
+-                VStack(spacing: 0) {
+-                    cover
+-                    ...
+-                }
+-            }
+-            .ignoresSafeArea(edges: .top)
++            ScrollViewReader { proxy in
++                ScrollView(showsIndicators: false) {
++                    VStack(spacing: 0) {
++                        cover
++                        ...
++                    }
++                }
++                .ignoresSafeArea(edges: .top)
++                .onChange(of: speaker.currentParagraph) { _, idx in
++                    guard let idx else { return }
++                    withAnimation(.easeInOut(duration: 0.4)) { proxy.scrollTo(Self.paraID(idx), anchor: .center) }
++                }
++            }
+```
+
+### d) progress under the Read-aloud button (in loadedBody)
+```diff
+             readAloudControl
++            if speaker.isSpeaking || speaker.isPaused { readAloudProgress }
+             if audioURL != nil {
+                 listenPlayer
+             } else {
+                 Text("No recording to play yet.")
+                     .font(.system(size: 13)).foregroundStyle(WT.ink.opacity(0.4))
+             }
+```
+```swift
+    private var readAloudProgress: some View {
+        let n = (speaker.currentParagraph ?? 0) + 1
+        let m = max(speaker.paragraphCount, 1)
+        return VStack(alignment: .leading, spacing: 6) {
+            Text("Reading \(n) of \(m)")
+                .font(.system(size: 12, weight: .medium)).foregroundStyle(WT.ink.opacity(0.5))
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(WT.ink.opacity(0.1))
+                    Capsule().fill(WV.teal).frame(width: geo.size.width * CGFloat(n) / CGFloat(m))
+                }
+            }
+            .frame(height: 4)
+        }
+    }
+```
+
+Mutual exclusion (listenPlayer.toggleListen → speaker.stop()) and onDisappear stop-both are unchanged.
+
+---
+
+## Acceptance & honesty
+- Build 0/0 + diagnostics after approval.
+- I will verify (RunCodeSnippet) that speak(paragraphs:) with the 174K split enqueues the expected chunk
+  count. **True audible read-to-completion is a device listen** — I'll say so plainly, not claim I heard it.
+- Highlight is paragraph-level (coarse for the giant single-paragraph memory); word-level via
+  willSpeakRange is a future enhancement. Highlight adds slight padding around each paragraph.
+- No neural path built — only the commented seam.
