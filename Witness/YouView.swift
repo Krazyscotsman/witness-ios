@@ -26,21 +26,24 @@ enum Profile {
 }
 
 struct YouView: View {
+    @Binding var path: NavigationPath
     var onSignOut: () -> Void
     @State private var showBackendTest = false   // TEMP (dev): backend pipe test
+
+    private enum YouRoute: Hashable { case settings }
 
     @AppStorage(Profile.firstNameKey) private var firstName: String = ""
     @AppStorage(Profile.lastNameKey) private var lastName: String = ""
     @AppStorage(Profile.companionNameKey) private var companionName: String = Profile.defaultCompanionName
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             ZStack {
                 ParchmentBackground()
                 ScrollView(showsIndicators: false) {
                     VStack(spacing: 18) {
                         profileHeader
-                        NavigationLink { SettingsView() } label: { settingsRow }
+                        NavigationLink(value: YouRoute.settings) { settingsRow }
                             .witnessPress()
                         signOutButton
                         // TEMP (dev): opens the backend connection-test scratch view. Remove
@@ -54,6 +57,7 @@ struct YouView: View {
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
+            .navigationDestination(for: YouRoute.self) { _ in SettingsView() }
             .sheet(isPresented: $showBackendTest) { BackendTestView() }
         }
     }

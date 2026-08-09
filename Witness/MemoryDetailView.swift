@@ -120,11 +120,12 @@ struct MemoryDetailView: View {
     }
 
     private var peopleChips: some View {
-        HStack(spacing: 8) {
+        FlowLayout(spacing: 8, lineSpacing: 8) {
             ForEach(memory.people, id: \.self) { p in
                 HStack(spacing: 6) {
                     Image(systemName: "person.fill").font(.system(size: 12)).foregroundStyle(WV.teal)
                     Text(p).font(.system(size: 15, weight: .medium)).foregroundStyle(WT.ink.opacity(0.8))
+                        .lineLimit(1)
                 }
                 .padding(.horizontal, 13).padding(.vertical, 8)
                 .background(WV.teal.opacity(0.10), in: Capsule())
@@ -302,5 +303,42 @@ struct MemoryDetailView: View {
             .shadow(color: WV.teal.opacity(0.35), radius: 14, y: 8)
         }
         .witnessPress(scale: 0.97)
+    }
+}
+
+// Wrapping row layout: chips flow onto multiple lines and never exceed the proposed width, so an
+// over-full people row can't drag the content column past the screen (fixes the vertical-bars +
+// text-overflow bug). Each name uses lineLimit(1) so a single long name truncates, never wraps.
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 8
+    var lineSpacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var x: CGFloat = 0, y: CGFloat = 0, lineHeight: CGFloat = 0, usedWidth: CGFloat = 0
+        for sub in subviews {
+            let s = sub.sizeThatFits(.unspecified)
+            let w = min(s.width, maxWidth)
+            if x > 0 && x + w > maxWidth { y += lineHeight + lineSpacing; x = 0; lineHeight = 0 }
+            x += w + spacing
+            lineHeight = max(lineHeight, s.height)
+            usedWidth = max(usedWidth, x - spacing)
+        }
+        return CGSize(width: usedWidth, height: y + lineHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let maxWidth = bounds.width
+        var x = bounds.minX, y = bounds.minY, lineHeight: CGFloat = 0
+        for sub in subviews {
+            let s = sub.sizeThatFits(.unspecified)
+            let w = min(s.width, maxWidth)
+            if x > bounds.minX && x + w > bounds.minX + maxWidth {
+                y += lineHeight + lineSpacing; x = bounds.minX; lineHeight = 0
+            }
+            sub.place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: ProposedViewSize(width: w, height: s.height))
+            x += w + spacing
+            lineHeight = max(lineHeight, s.height)
+        }
     }
 }

@@ -39,7 +39,7 @@ struct ContentView: View {
                 })
                 .transition(pageTransition)
             case .main:
-                MainTabView(onSignOut: {
+                MainTabView(auth: auth, onSignOut: {
                     auth.logout()
                     withAnimation(.easeInOut(duration: 0.5)) { route = .threshold }
                 })
@@ -51,6 +51,12 @@ struct ContentView: View {
             // (min ~3s AND auth resolved). bootstrapAndValidate has an 8s timeout so a down
             // backend resolves to false quickly rather than hanging the splash.
             authValid = await auth.bootstrapAndValidate()
+        }
+        .onChange(of: auth.isLoggedIn) { _, loggedIn in
+            // Session ended mid-use (e.g. a 401 with no/invalid refresh) → back to the door.
+            if !loggedIn && (route == .main || route == .onboarding) {
+                withAnimation(.easeInOut(duration: 0.5)) { route = .threshold }
+            }
         }
     }
 

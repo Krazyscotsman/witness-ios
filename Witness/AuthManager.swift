@@ -8,6 +8,7 @@ import Combine
 final class AuthManager: ObservableObject {
     @Published private(set) var narratorId: String?
     @Published private(set) var userName: String?
+    @Published private(set) var isLoggedIn = false
 
     private let api = APIClient.shared
     private let keychain = KeychainStore.shared
@@ -23,10 +24,12 @@ final class AuthManager: ObservableObject {
         do {
             // 8s timeout so an unreachable/down backend fails to login within seconds, not a ~60s hang.
             _ = try await api.get("/api/v1/auth/me", timeout: 8, as: MeResponse.self)   // 200 = valid
+            isLoggedIn = true
             return true
         } catch {
             keychain.clear()
             narratorId = nil; userName = nil
+            isLoggedIn = false
             return false
         }
     }
@@ -40,11 +43,13 @@ final class AuthManager: ObservableObject {
         keychain.save(token: r.token)
         narratorId = r.user.narratorId
         userName = r.user.name
+        isLoggedIn = true
     }
 
     func logout() {
         keychain.clear()
         narratorId = nil; userName = nil
+        isLoggedIn = false
     }
 
     /// Runtime expiry handling for GUARDED endpoints. Call when a guarded request throws

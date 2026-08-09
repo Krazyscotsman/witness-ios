@@ -52,7 +52,7 @@ struct MemoriesResponse: Decodable {
 /// is optional so a null/absent value in a future memory degrades gracefully rather than
 /// throwing and making the whole pipe look broken. The three-state `exactDateEstimated` (Bool?)
 /// is preserved — null/false/true are distinct facts, never collapsed to a default.
-struct MemoryDTO: Decodable, Identifiable {
+struct MemoryDTO: Decodable, Identifiable, Hashable {
     let id: String                   // required: backend always returns it; Identifiable key
     let title: String?
     let narrative: String?

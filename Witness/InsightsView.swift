@@ -3,8 +3,10 @@ import SwiftUI
 // MARK: - Insights: a HUB (per IA map). Anchors opens the real surface; others are
 // placeholders naming their endpoint until built out.
 struct InsightsView: View {
+    @Binding var path: NavigationPath
+
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             ZStack {
                 ParchmentBackground()
                 ScrollView(showsIndicators: false) {
