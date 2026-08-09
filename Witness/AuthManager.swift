@@ -9,6 +9,8 @@ final class AuthManager: ObservableObject {
     @Published private(set) var narratorId: String?
     @Published private(set) var userName: String?
     @Published private(set) var isLoggedIn = false
+    /// Backend onboarding flag, hydrated at launch / after login. nil = unknown (fetch not done or failed).
+    @Published private(set) var onboardingCompleted: Bool?
 
     private let api = APIClient.shared
     private let keychain = KeychainStore.shared
@@ -50,6 +52,33 @@ final class AuthManager: ObservableObject {
         keychain.clear()
         narratorId = nil; userName = nil
         isLoggedIn = false
+        onboardingCompleted = nil
+    }
+
+    /// Launch profile: after the token validates, fetch GET /settings/profile (bounded 8s timeout so a hung
+    /// call can't freeze launch). Applies companion name/voice to the app's stored values and records
+    /// onboarding_completed for routing. On failure, onboardingCompleted stays nil — the router treats
+    /// "valid token + unknown" as: proceed to the main app (don't block, don't re-onboard).
+    func loadLaunchProfile() async {
+        do {
+            let p = try await api.get("/api/v1/settings/profile", timeout: 8, as: ProfileDTO.self)
+            applyProfile(p)
+            onboardingCompleted = p.onboardingCompleted
+        } catch {
+            onboardingCompleted = nil
+        }
+    }
+
+    /// Hydrates the app's stored companion identity from the backend (source of truth at launch). Only
+    /// overwrites when the backend actually provides a value.
+    private func applyProfile(_ p: ProfileDTO) {
+        if let name = p.companionName?.trimmingCharacters(in: .whitespaces), !name.isEmpty {
+            UserDefaults.standard.set(name, forKey: Profile.companionNameKey)
+        }
+        if let voice = p.companionVoice?.trimmingCharacters(in: .whitespaces), !voice.isEmpty {
+            // Stored as-is; Speaker tolerates a bare gender ("female"/"male") or a full <style>_<gender> id.
+            UserDefaults.standard.set(voice, forKey: Profile.voiceKey)
+        }
     }
 
     /// Runtime expiry handling for GUARDED endpoints. Call when a guarded request throws

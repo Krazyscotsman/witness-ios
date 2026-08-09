@@ -160,3 +160,22 @@ struct MemoryQuote: Decodable, Hashable {
         case speakerName = "speaker_name"
     }
 }
+
+// MARK: - Settings profile (GET /api/v1/settings/profile) — launch routing + companion identity.
+
+/// Lenient: keys may be absent/null; unknown keys are ignored by Decodable. `onboarding_completed` is the
+/// routing source of truth; `companion_name`/`companion_voice` hydrate the app's stored companion identity
+/// at launch.
+struct ProfileDTO: Decodable {
+    let id: String?
+    let onboardingCompleted: Bool?
+    let companionName: String?
+    let companionVoice: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case onboardingCompleted = "onboarding_completed"
+        case companionName = "companion_name"
+        case companionVoice = "companion_voice"
+    }
+}

@@ -7,9 +7,6 @@ struct ContentView: View {
     @StateObject private var auth = AuthManager()
     @State private var authValid: Bool? = nil   // nil = validation pending
 
-    // Real: driven by the backend's narrator.onboarding_completed flag (deferred; local flag for now).
-    @AppStorage("profile.onboarded") private var onboarded: Bool = false
-
     private var pageTransition: AnyTransition {
         .asymmetric(insertion: .opacity.combined(with: .offset(y: 14)), removal: .opacity)
     }
@@ -28,13 +25,20 @@ struct ContentView: View {
                     auth: auth,
                     onBack: { withAnimation(.easeInOut(duration: 0.6)) { route = .threshold } },
                     onAuthenticated: {
-                        withAnimation(.easeInOut(duration: 0.6)) { route = onboarded ? .main : .onboarding }
+                        // Fetch the backend profile, then route on onboarding_completed (decision a: unknown → main).
+                        Task {
+                            await auth.loadLaunchProfile()
+                            withAnimation(.easeInOut(duration: 0.6)) {
+                                route = (auth.onboardingCompleted ?? true) ? .main : .onboarding
+                            }
+                        }
                     }
                 )
                 .transition(pageTransition)
             case .onboarding:
                 OnboardingView(onFinish: {
-                    onboarded = true
+                    // The backend onboarding_completed flag is written by the (not-yet-wired) save step.
+                    // Until then this only advances the session; a relaunch re-routes per the backend flag.
                     withAnimation(.easeInOut(duration: 0.6)) { route = .main }
                 })
                 .transition(pageTransition)
@@ -47,10 +51,13 @@ struct ContentView: View {
             }
         }
         .task {
-            // Validate underneath the splash; the splash decides WHEN to reveal the result
-            // (min ~3s AND auth resolved). bootstrapAndValidate has an 8s timeout so a down
-            // backend resolves to false quickly rather than hanging the splash.
-            authValid = await auth.bootstrapAndValidate()
+            // Validate underneath the splash, THEN (if valid) fetch the profile so the onboarding route is
+            // known at reveal. Both calls are timeout-bounded (8s each) so a down/hung backend can't freeze
+            // launch. authValid is set only after the profile resolves (or times out) — the splash reveals on
+            // min ~3s AND authValid != nil.
+            let valid = await auth.bootstrapAndValidate()
+            if valid { await auth.loadLaunchProfile() }
+            authValid = valid
         }
         .onChange(of: auth.isLoggedIn) { _, loggedIn in
             // Session ended mid-use (e.g. a 401 with no/invalid refresh) → back to the door.
@@ -64,7 +71,8 @@ struct ContentView: View {
     private func finishLaunch() {
         let valid = authValid ?? false
         withAnimation(.easeInOut(duration: 0.6)) {
-            route = valid ? (onboarded ? .main : .onboarding) : .threshold
+            // Decision (a): valid token but profile unknown/failed (onboardingCompleted == nil) → main.
+            route = valid ? ((auth.onboardingCompleted ?? true) ? .main : .onboarding) : .threshold
         }
     }
 }

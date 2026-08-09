@@ -114,9 +114,11 @@ final class Speaker: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
     /// Honest: distinguishable, not richly characterful — real character arrives with neural TTS.
     private func voiceSelection() -> (voice: AVSpeechSynthesisVoice?, rate: Float, pitch: Float) {
         let id = UserDefaults.standard.string(forKey: Profile.voiceKey) ?? "playful_female"
-        let parts = id.split(separator: "_").map(String.init)
-        let style = parts.first ?? "playful"
-        let gender = parts.count > 1 ? parts[1] : "female"
+        // Accepts a full "<style>_<gender>" id OR a bare gender ("female"/"male"); anything else → female,
+        // default character. Never crashes on an unexpected value.
+        let tokens = id.split(separator: "_").map(String.init)
+        let gender = (tokens.last == "male") ? "male" : "female"
+        let style = tokens.count >= 2 ? tokens[0] : "default"   // bare gender → neutral rate/pitch
 
         let base = AVSpeechUtteranceDefaultSpeechRate
         var rate = base * 0.92
