@@ -3,6 +3,7 @@ import SwiftUI
 // MARK: - Login / Create account. Still "the doorway." Buttons temporarily advance
 // to Home so the flow is walkable; real auth wires in later.
 struct LoginView: View {
+    @ObservedObject var auth: AuthManager
     var onBack: () -> Void
     var onAuthenticated: () -> Void
 
@@ -10,6 +11,8 @@ struct LoginView: View {
     @State private var name = ""
     @State private var email = ""
     @State private var password = ""
+    @State private var busy = false
+    @State private var errorText: String?
 
     private let rControl: CGFloat = 14
     private let fieldFill = Color(hex: 0xfaf7f0)
@@ -47,6 +50,14 @@ struct LoginView: View {
 
                     primaryButton(isRegistering ? "Create account" : "Sign in")
                         .padding(.top, 18)
+                        .disabled(busy || email.isEmpty || password.isEmpty)
+                    if let errorText {
+                        Text(errorText)
+                            .font(.system(size: 13)).foregroundStyle(WV.danger)
+                            .multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.top, 10)
+                    }
 
                     dividerOr.padding(.vertical, 20)
 
@@ -96,11 +107,8 @@ struct LoginView: View {
     }
 
     private func primaryButton(_ title: String) -> some View {
-        Button {
-            // TEMPORARY: advance to Home. Real: POST /api/v1/auth/login (or /register), then onAuthenticated().
-            onAuthenticated()
-        } label: {
-            Text(title)
+        Button { submit() } label: {
+            Text(busy ? "Signing in…" : title)
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity).frame(height: 54)
@@ -111,11 +119,34 @@ struct LoginView: View {
         .buttonStyle(.plain)
     }
 
+    // Real login (Sign-in mode). Registration/OAuth aren't wired yet — see submit()/providerButton.
+    private func submit() {
+        guard !isRegistering else { errorText = "Account creation isn’t available yet."; return }
+        let e = email.trimmingCharacters(in: .whitespaces)
+        guard !e.isEmpty, !password.isEmpty else { return }
+        busy = true; errorText = nil
+        Task {
+            do {
+                try await auth.login(email: e, password: password)
+                onAuthenticated()
+            } catch {
+                errorText = Self.message(for: error)
+                busy = false
+            }
+        }
+    }
+
+    private static func message(for error: Error) -> String {
+        if let api = error as? APIError {
+            if case .unauthorized(let detail, _) = api { return detail ?? "Incorrect email or password." }
+            return api.errorDescription ?? "Something went wrong."
+        }
+        return error.localizedDescription
+    }
+
     private func providerButton<Icon: View>(_ title: String, @ViewBuilder icon: () -> Icon) -> some View {
-        Button {
-            // TEMPORARY: advance to Home. Real: POST /api/v1/auth/oauth, then onAuthenticated().
-            onAuthenticated()
-        } label: {
+        // OAuth isn't wired yet (later item). Disabled so it can't grant tokenless entry past the gate.
+        Button { } label: {
             HStack(spacing: 10) {
                 icon().frame(width: 18, height: 18)
                 Text(title).font(.system(size: 15, weight: .medium))
@@ -126,6 +157,8 @@ struct LoginView: View {
             .overlay(RoundedRectangle(cornerRadius: rControl).stroke(WT.ink.opacity(0.2), lineWidth: 1))
         }
         .buttonStyle(.plain)
+        .disabled(true)
+        .opacity(0.5)
     }
 
     private var dividerOr: some View {

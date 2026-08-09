@@ -25,6 +25,12 @@ struct LoginResponse: Decodable {
     }
 }
 
+// MARK: - Session helpers
+
+struct MeResponse: Decodable {}                          // permissive: 200 = valid token (shape ignored)
+struct RefreshResponse: Decodable { let token: String }  // POST /auth/refresh -> {status, token}; token kept
+struct EmptyBody: Encodable {}
+
 // MARK: - Health
 
 struct HealthResponse: Decodable {

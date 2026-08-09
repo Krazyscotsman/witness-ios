@@ -4,7 +4,7 @@ enum APIError: Error, LocalizedError {
     case invalidURL
     case network(Error)                    // transport failure (offline, timeout, refused)
     case http(status: Int, body: String?)  // non-2xx
-    case unauthorized                       // 401 (token expiry handling later)
+    case unauthorized(detail: String?, code: String?)   // 401; detail/code parsed from body
     case encoding(Error)                    // failed to encode request body
     case decoding(Error)                    // failed to decode response
 
@@ -13,12 +13,15 @@ enum APIError: Error, LocalizedError {
         case .invalidURL: return "Invalid URL."
         case .network(let e): return "Network error: \(e.localizedDescription)"
         case .http(let s, let b): return "HTTP \(s)\(b.map { ": \($0)" } ?? "")"
-        case .unauthorized: return "Unauthorized (401)."
+        case .unauthorized(let d, let c):
+            return "Unauthorized (401)\(c.map { " · \($0)" } ?? "")\(d.map { ": \($0)" } ?? "")"
         case .encoding(let e): return "Encoding error: \(e.localizedDescription)"
         case .decoding(let e): return "Decoding error: \(e)"
         }
     }
 }
+
+private struct ErrorBody: Decodable { let detail: String?; let code: String? }
 
 /// Reusable networking layer. Cloud swap later = change `baseURL` (one line).
 final class APIClient {
@@ -42,22 +45,24 @@ final class APIClient {
 
     private struct Empty: Encodable {}
 
-    func get<Response: Decodable>(_ path: String, authorized: Bool = true,
+    func get<Response: Decodable>(_ path: String, authorized: Bool = true, timeout: TimeInterval? = nil,
                                   as: Response.Type = Response.self) async throws -> Response {
-        try await request(path, method: "GET", body: Optional<Empty>.none, authorized: authorized)
+        try await request(path, method: "GET", body: Optional<Empty>.none, authorized: authorized, timeout: timeout)
     }
 
     func post<Body: Encodable, Response: Decodable>(_ path: String, body: Body, authorized: Bool = true,
+                                                     timeout: TimeInterval? = nil,
                                                      as: Response.Type = Response.self) async throws -> Response {
-        try await request(path, method: "POST", body: body, authorized: authorized)
+        try await request(path, method: "POST", body: body, authorized: authorized, timeout: timeout)
     }
 
     private func request<Body: Encodable, Response: Decodable>(
-        _ path: String, method: String, body: Body?, authorized: Bool
+        _ path: String, method: String, body: Body?, authorized: Bool, timeout: TimeInterval? = nil
     ) async throws -> Response {
         guard let url = URL(string: path, relativeTo: Self.baseURL) else { throw APIError.invalidURL }
         var req = URLRequest(url: url)
         req.httpMethod = method
+        if let timeout { req.timeoutInterval = timeout }   // caps hangs (e.g. dev server down)
         req.setValue("application/json", forHTTPHeaderField: "Accept")
 
         if let body {
@@ -76,7 +81,12 @@ final class APIClient {
         guard let http = response as? HTTPURLResponse else {
             throw APIError.network(URLError(.badServerResponse))
         }
-        if http.statusCode == 401 { throw APIError.unauthorized }
+        if http.statusCode == 401 {
+            // /auth/login bad-creds carry {detail}; guarded endpoints carry {code}; /auth/me and
+            // /auth/refresh are code-less (nil code -> re-login, handled by AuthManager).
+            let parsed = try? JSONDecoder().decode(ErrorBody.self, from: data)
+            throw APIError.unauthorized(detail: parsed?.detail, code: parsed?.code)
+        }
         guard (200..<300).contains(http.statusCode) else {
             throw APIError.http(status: http.statusCode, body: String(data: data, encoding: .utf8))
         }
