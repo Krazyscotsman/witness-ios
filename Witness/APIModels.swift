@@ -290,12 +290,13 @@ struct LinkedMemory: Decodable, Hashable {
     // `narrative` omitted on purpose (heavy).
 }
 
-/// PUT /timeline/relationships/{id} body — EXACTLY the 22 editable columns of narrator_relationships,
+/// POST /timeline/relationships (create) AND PUT /timeline/relationships/{id} (edit) body — EXACTLY the 22
+/// editable columns of narrator_relationships,
 /// nothing else. The backend has NO request validation: an unknown/misspelled column throws 500, so making
 /// the type structurally hold only real columns is the defense. Values are pre-sanitized by the view
 /// (snake_case enums, ISO dates, "" for blanks → server NULL). Read-only nbq_response / person_canonical_name
 /// are structurally absent — impossible to send. `nonisolated` because it's encoded in a nonisolated context.
-nonisolated struct RelationshipUpdateRequest: Encodable {
+nonisolated struct RelationshipWriteRequest: Encodable {
     let firstName, middleName, lastName, nickname, maidenName: String
     let relationshipType: String
     let familyRole, significance: String

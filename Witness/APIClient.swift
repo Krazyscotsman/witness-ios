@@ -90,6 +90,38 @@ final class APIClient {
         return data   // any 2xx = success
     }
 
+    /// POST that treats any 2xx as success and does NOT decode the response body (INSERT acks vary:
+    /// {status}, {id}, 201, etc.). Throws APIError on 401 / non-2xx / transport. Returns raw bytes.
+    @discardableResult
+    func postIgnoringResponseBody<Body: Encodable>(
+        _ path: String, body: Body, authorized: Bool = true, timeout: TimeInterval? = nil
+    ) async throws -> Data {
+        guard let url = URL(string: path, relativeTo: Self.baseURL) else { throw APIError.invalidURL }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        if let timeout { req.timeoutInterval = timeout }
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        do { req.httpBody = try JSONEncoder().encode(body) } catch { throw APIError.encoding(error) }
+        if authorized, let token = tokenProvider() {
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        let data: Data, response: URLResponse
+        do { (data, response) = try await session.data(for: req) }
+        catch { throw APIError.network(error) }
+        guard let http = response as? HTTPURLResponse else {
+            throw APIError.network(URLError(.badServerResponse))
+        }
+        if http.statusCode == 401 {
+            let parsed = try? JSONDecoder().decode(ErrorBody.self, from: data)
+            throw APIError.unauthorized(detail: parsed?.detail, code: parsed?.code)
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw APIError.http(status: http.statusCode, body: String(data: data, encoding: .utf8))
+        }
+        return data   // any 2xx = success
+    }
+
     private func request<Body: Encodable, Response: Decodable>(
         _ path: String, method: String, body: Body?, authorized: Bool, timeout: TimeInterval? = nil,
         decoder: JSONDecoder = JSONDecoder()

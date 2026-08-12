@@ -1,15 +1,23 @@
 import SwiftUI
 
-// Shared nav bar (chevron back with a title).
-func anchorNavBar(title: String, onBack: @escaping () -> Void) -> some View {
+// Shared nav bar (chevron back with a title + optional trailing action).
+func anchorNavBar<Trailing: View>(title: String, onBack: @escaping () -> Void,
+                                  @ViewBuilder trailing: () -> Trailing = { EmptyView() }) -> some View {
     HStack {
         Button(action: onBack) {
             HStack(spacing: 4) { Image(systemName: "chevron.left").font(.system(size: 16, weight: .semibold)); Text(title).font(.system(size: 16)) }
                 .foregroundStyle(WV.teal).frame(height: 44)
         }.witnessPress()
         Spacer()
+        trailing()
     }
     .padding(.horizontal, 16).background(WV.parchment.opacity(0.96))
+}
+
+// "Add New" icon (teal circle +) for the relationships create entries.
+func anchorAddIcon() -> some View {
+    Image(systemName: "plus").font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
+        .frame(width: 38, height: 38).background(WV.teal, in: Circle())
 }
 
 // MARK: - L1 — Categories dashboard
@@ -119,7 +127,7 @@ struct AnchorRelationshipsView: View {
                     }
                     let critical = vm.criticalPeople
                     NavigationLink {
-                        RelationshipListView(title: "Critical People", rows: critical, vm: vm, auth: auth)
+                        RelationshipListView(title: "Critical People", source: .critical, vm: vm, auth: auth)
                     } label: { criticalCard(count: critical.count) }.witnessPress(scale: 0.98)
 
                     let chips = vm.relationshipChips
@@ -128,14 +136,18 @@ struct AnchorRelationshipsView: View {
                     } else {
                         ForEach(chips) { chip in
                             NavigationLink {
-                                RelationshipListView(title: chip.title, rows: vm.relationships(typeKey: chip.id), vm: vm, auth: auth)
+                                RelationshipListView(title: chip.title, source: .type(key: chip.id, display: chip.title), vm: vm, auth: auth)
                             } label: { chipRow(chip) }.witnessPress()
                         }
                     }
                 }
                 .padding(.horizontal, 24).padding(.top, 60).padding(.bottom, 110)
             }
-            anchorNavBar(title: "Anchors", onBack: { dismiss() })
+            anchorNavBar(title: "Anchors", onBack: { dismiss() }) {
+                NavigationLink { RelationshipCreateView(prefillType: nil, vm: vm, auth: auth) } label: { anchorAddIcon() }
+                    .witnessPress()
+                    .witnessHint("Add a new person to your relationships.")
+            }
         }
         .navigationBarBackButtonHidden(true).toolbar(.hidden, for: .navigationBar)
     }
