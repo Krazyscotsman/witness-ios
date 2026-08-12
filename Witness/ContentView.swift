@@ -36,9 +36,8 @@ struct ContentView: View {
                 )
                 .transition(pageTransition)
             case .onboarding:
-                OnboardingView(onFinish: {
-                    // The backend onboarding_completed flag is written by the (not-yet-wired) save step.
-                    // Until then this only advances the session; a relaunch re-routes per the backend flag.
+                OnboardingView(auth: auth, onFinish: {
+                    // The POST in OnboardingView.save() flips onboarding_completed server-side; this only routes.
                     withAnimation(.easeInOut(duration: 0.6)) { route = .main }
                 })
                 .transition(pageTransition)

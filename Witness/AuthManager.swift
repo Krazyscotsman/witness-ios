@@ -69,6 +69,15 @@ final class AuthManager: ObservableObject {
         }
     }
 
+    /// Onboarding save. POST /settings/profile persists the profile AND flips onboarding_completed
+    /// server-side (single call — no /auth/complete-onboarding). Any 2xx is success; the ack body isn't
+    /// depended on for the flag (the launch profile-fetch confirms it). Throws APIError; the view maps it
+    /// to friendly copy.
+    func saveOnboardingProfile(_ body: ProfileCreateRequest) async throws {
+        _ = try await api.post("/api/v1/settings/profile", body: body, timeout: 20, as: ProfileCreateResponse.self)
+        onboardingCompleted = true
+    }
+
     /// Hydrates the app's stored companion identity from the backend (source of truth at launch). Only
     /// overwrites when the backend actually provides a value.
     private func applyProfile(_ p: ProfileDTO) {

@@ -179,3 +179,46 @@ struct ProfileDTO: Decodable {
         case companionVoice = "companion_voice"
     }
 }
+
+/// POST /api/v1/settings/profile body. Saves the profile AND flips onboarding_completed (one call — no
+/// /auth/complete-onboarding). first_name / last_name / birth_date are ALWAYS sent (last_name "" when empty,
+/// never omitted). Optional details are omitted when nil (synthesized encodeIfPresent). All three voice
+/// fields are always sent; custom_voice_name (the Gemini name) is what drives playback.
+struct ProfileCreateRequest: Encodable {
+    let firstName: String
+    let lastName: String
+    let birthDate: String            // yyyy-MM-dd (en_US_POSIX)
+    let birthCity: String?
+    let birthState: String?
+    let gender: String?
+    let companionName: String
+    let companionVoice: String
+    let companionPersonality: String
+    let customVoiceName: String
+
+    enum CodingKeys: String, CodingKey {
+        case firstName = "first_name"
+        case lastName = "last_name"
+        case birthDate = "birth_date"
+        case birthCity = "birth_city"
+        case birthState = "birth_state"
+        case gender
+        case companionName = "companion_name"
+        case companionVoice = "companion_voice"
+        case companionPersonality = "companion_personality"
+        case customVoiceName = "custom_voice_name"
+    }
+}
+
+/// POST /api/v1/settings/profile response: { "status": "created"|"updated", "narrator_id": "<uuid>" }.
+/// A small ack — the server flips onboarding_completed regardless of this body, so any 2xx = success; we do
+/// NOT read the flag back from here (the launch profile-fetch confirms it).
+struct ProfileCreateResponse: Decodable {
+    let status: String?
+    let narratorId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case status
+        case narratorId = "narrator_id"
+    }
+}

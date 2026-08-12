@@ -10,6 +10,7 @@ import SwiftUI
 //        birthState, gender (trim||null), selectedVoice, companionName }  (server builds name)
 //   POST /api/v1/auth/complete-onboarding
 struct OnboardingView: View {
+    @ObservedObject var auth: AuthManager
     var onFinish: () -> Void
 
     // Persisted — single source of truth read elsewhere (You, Talk, Record, memory detail).
@@ -28,6 +29,8 @@ struct OnboardingView: View {
 
     @State private var step = 0
     @State private var completed = false
+    @State private var isSaving = false
+    @State private var saveError: SaveError?
     private let lastStep = 3
 
     // Legal acceptance gate (shown on the completion screen, before "Begin").
@@ -294,24 +297,23 @@ struct OnboardingView: View {
             Spacer(minLength: 16)
 
             agreementCard.padding(.horizontal, 24)
+            if saveError != nil { errorBanner.padding(.top, 4) }
         }
         .padding(.horizontal, 24)
         .safeAreaInset(edge: .bottom) {
-            Button {
-                // Real: POST /api/v1/settings/profile {first_name,last_name,birthdate,birthCity,
-                //   birthState, gender: gender.trimmed || nil, selectedVoice, companionName}
-                // then POST /api/v1/auth/complete-onboarding.
-                onFinish()
-            } label: {
-                Text("Begin your witness")
-                    .font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
-                    .frame(maxWidth: .infinity).frame(height: 56)
-                    .background(allAgreed ? WV.teal : WV.teal.opacity(0.4),
-                                in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                    .shadow(color: WV.teal.opacity(allAgreed ? 0.3 : 0), radius: 10, y: 6)
+            Button { Task { await save() } } label: {
+                Group {
+                    if isSaving { ProgressView().tint(.white) }
+                    else { Text("Begin your witness").font(.system(size: 17, weight: .semibold)) }
+                }
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity).frame(height: 56)
+                .background((allAgreed && !isSaving) ? WV.teal : WV.teal.opacity(0.4),
+                            in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .shadow(color: WV.teal.opacity(allAgreed ? 0.3 : 0), radius: 10, y: 6)
             }
             .witnessPress()
-            .disabled(!allAgreed)
+            .disabled(!allAgreed || isSaving)
             .padding(.horizontal, 24).padding(.bottom, 10)
         }
         .sheet(item: $legalDoc) { LegalView(doc: $0) }
@@ -390,6 +392,121 @@ struct OnboardingView: View {
         }
     }
 
+    // MARK: - Save (POST /api/v1/settings/profile — saves profile AND flips onboarding_completed)
+
+    private enum SaveError: Equatable {
+        case sessionExpired, badDate, network, generic
+        var message: String {
+            switch self {
+            case .sessionExpired: return "Your session has timed out. Please sign in again to finish setting up."
+            case .badDate:        return "There was a problem with your date of birth. Please check it and try again."
+            case .network:        return "We couldn't save your details. Please check your connection and try again."
+            case .generic:        return "Something went wrong saving your details. Please try again."
+            }
+        }
+        var actionTitle: String {
+            switch self {
+            case .sessionExpired: return "Sign in"
+            case .badDate:        return "Review my details"
+            default:              return "Try again"
+            }
+        }
+    }
+
+    private static let isoFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")   // fixed locale so the wire format never drifts
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+
+    private var errorBanner: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "exclamationmark.circle").font(.system(size: 26)).foregroundStyle(WV.danger)
+            Text(saveError?.message ?? "")
+                .font(.system(size: 15)).foregroundStyle(WT.ink.opacity(0.75))
+                .multilineTextAlignment(.center).lineSpacing(3).fixedSize(horizontal: false, vertical: true)
+            Button { handleErrorAction() } label: {
+                Text(saveError?.actionTitle ?? "Try again")
+                    .font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
+                    .frame(maxWidth: .infinity).frame(height: 50)
+                    .background(WV.teal, in: RoundedRectangle(cornerRadius: 14))
+            }
+            .witnessPress()
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity)
+        .background(WV.card, in: RoundedRectangle(cornerRadius: 18))
+        .overlay(RoundedRectangle(cornerRadius: 18).stroke(WT.ink.opacity(0.07), lineWidth: 1))
+        .padding(.horizontal, 24)
+    }
+
+    private func handleErrorAction() {
+        switch saveError {
+        case .sessionExpired:
+            auth.logout()                                   // ContentView's isLoggedIn watcher routes to the door
+        case .badDate:
+            saveError = nil
+            withAnimation { completed = false; step = 1 }   // back to the birthdate step so they can fix it
+        default:
+            Task { await save() }                           // network/generic → retry the POST
+        }
+    }
+
+    private func save() async {
+        saveError = nil
+        isSaving = true
+        defer { isSaving = false }
+        do {
+            let body = buildRequest()
+            try await auth.saveOnboardingProfile(body)
+            persistLocal(body)
+            onFinish()                                      // success → route to main
+        } catch {
+            saveError = Self.mapError(error)                // failure → stay on the completion screen
+        }
+    }
+
+    private func buildRequest() -> ProfileCreateRequest {
+        func opt(_ s: String) -> String? {
+            let t = s.trimmingCharacters(in: .whitespaces); return t.isEmpty ? nil : t
+        }
+        let cName = companionName.trimmingCharacters(in: .whitespaces)
+        return ProfileCreateRequest(
+            firstName: firstName.trimmingCharacters(in: .whitespaces),
+            lastName: lastName.trimmingCharacters(in: .whitespaces),     // "" allowed, always sent
+            birthDate: Self.isoFormatter.string(from: birthdate),
+            birthCity: opt(birthCity),
+            birthState: opt(birthState),
+            gender: opt(gender),
+            companionName: cName.isEmpty ? Profile.defaultCompanionName : cName,
+            companionVoice: selectedVoice,
+            companionPersonality: VoiceOption.personality(for: selectedVoice),
+            customVoiceName: VoiceOption.geminiName(for: selectedVoice)
+        )
+    }
+
+    private func persistLocal(_ body: ProfileCreateRequest) {
+        let d = UserDefaults.standard
+        d.set(body.lastName, forKey: Profile.lastNameKey)
+        d.set(body.birthDate, forKey: Profile.birthdateKey)
+        d.set(body.companionVoice, forKey: Profile.voiceKey)
+        d.set(body.customVoiceName, forKey: Profile.customVoiceNameKey)
+        // firstName + companionName are already @AppStorage-backed.
+    }
+
+    private static func mapError(_ error: Error) -> SaveError {
+        if let api = error as? APIError {
+            switch api {
+            case .unauthorized:   return .sessionExpired
+            case .http(let s, _): return s == 400 ? .badDate : .generic
+            case .network:        return .network
+            default:              return .generic
+            }
+        }
+        return .generic
+    }
+
     // MARK: Reusable field
     private func field(_ placeholder: String, text: Binding<String>, autocap: TextInputAutocapitalization) -> some View {
         TextField(placeholder, text: text)
@@ -424,4 +541,22 @@ struct VoiceOption: Identifiable {
         .init(id: "direct_male",    label: "Direct",  gender: "male",   desc: "Strong and focused"),
         .init(id: "playful_male",   label: "Playful", gender: "male",   desc: "Friendly and upbeat"),
     ]
+
+    /// Gemini voice name that actually drives playback. Authoritative mapping — do not guess.
+    static func geminiName(for id: String) -> String {
+        switch id {
+        case "warm_female":    return "Kore"
+        case "direct_female":  return "Leda"
+        case "playful_female": return "Aoede"
+        case "warm_male":      return "Orus"
+        case "direct_male":    return "Charon"
+        case "playful_male":   return "Puck"
+        default:               return "Aoede"   // playful_female fallback; never crash on an unknown id
+        }
+    }
+
+    /// Personality/style token from the id (warm / direct / playful).
+    static func personality(for id: String) -> String {
+        String(id.split(separator: "_").first ?? "playful")
+    }
 }
