@@ -26,6 +26,7 @@ enum Profile {
 }
 
 struct YouView: View {
+    @ObservedObject var auth: AuthManager
     @Binding var path: NavigationPath
     var onSignOut: () -> Void
     @State private var showBackendTest = false   // TEMP (dev): backend pipe test
@@ -57,7 +58,7 @@ struct YouView: View {
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
-            .navigationDestination(for: YouRoute.self) { _ in SettingsView() }
+            .navigationDestination(for: YouRoute.self) { _ in SettingsView(auth: auth) }
             .sheet(isPresented: $showBackendTest) { BackendTestView() }
         }
     }

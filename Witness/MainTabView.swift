@@ -40,7 +40,7 @@ struct MainTabView: View {
             case .memories: MemoriesView(vm: memoriesVM, auth: auth, path: $memoriesPath)
             case .talk:     TalkView()
             case .insights: InsightsView(path: $insightsPath)
-            case .you:      YouView(path: $youPath, onSignOut: onSignOut)
+            case .you:      YouView(auth: auth, path: $youPath, onSignOut: onSignOut)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

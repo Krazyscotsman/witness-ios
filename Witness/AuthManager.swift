@@ -78,6 +78,12 @@ final class AuthManager: ObservableObject {
         onboardingCompleted = true
     }
 
+    /// Settings edit. PUT /settings/profile is a partial update; any 2xx is success (ack body not decoded).
+    /// Throws APIError; the view maps it to friendly copy. Local @AppStorage is committed by the view on success.
+    func updateProfile(_ body: ProfileUpdateRequest) async throws {
+        _ = try await api.putIgnoringResponseBody("/api/v1/settings/profile", body: body, timeout: 20)
+    }
+
     /// Hydrates the app's stored companion identity from the backend (source of truth at launch). Only
     /// overwrites when the backend actually provides a value.
     private func applyProfile(_ p: ProfileDTO) {

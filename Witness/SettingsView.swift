@@ -5,6 +5,7 @@ import SwiftUI
 // PUT /api/v1/settings/profile (save). Bigger sub-features link to placeholders.
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
+    @ObservedObject var auth: AuthManager
 
     @AppStorage(Profile.firstNameKey) private var firstName: String = ""
     @AppStorage(Profile.lastNameKey) private var lastName: String = ""
@@ -15,7 +16,6 @@ struct SettingsView: View {
     @AppStorage(Profile.birthStateKey) private var birthState: String = ""
     @AppStorage(Profile.voiceKey) private var selectedVoice: String = "playful_female"
     @AppStorage(Profile.customVoiceNameKey) private var customVoiceName: String = ""
-    @AppStorage(Profile.voiceConfirmKey) private var voiceConfirm: Bool = true
     @AppStorage(Profile.conversationModeKey) private var conversationMode: String = "text"
     @AppStorage(Profile.vadSilenceKey) private var vadSilence: Int = 10
     @AppStorage(Profile.textSizeKey) private var textSize: String = "medium"
@@ -26,13 +26,39 @@ struct SettingsView: View {
     @State private var showDatePicker = false
     @State private var pickerDate = Date()
 
+    // Edit-profile drafts (staged; committed to @AppStorage only on a successful PUT).
+    @State private var draftFirst = ""
+    @State private var draftLast = ""
+    @State private var draftCompanion = ""
+    @State private var draftVoice = "playful_female"
+    @State private var originalVoice = "playful_female"   // to detect a voice change
+    @State private var prefilled = false
+    @State private var isSaving = false
+    @State private var didSave = false
+    @State private var saveError: SaveError?
+
+    private enum SaveError: Equatable {
+        case sessionExpired, validation, network, generic
+        var message: String {
+            switch self {
+            case .sessionExpired: return "Your session has timed out. Please sign in again to save changes."
+            case .validation:     return "Some details couldn't be saved. Please check them and try again."
+            case .network:        return "We couldn't save your changes. Please check your connection and try again."
+            case .generic:        return "Something went wrong saving your changes. Please try again."
+            }
+        }
+        var actionTitle: String { self == .sessionExpired ? "Sign in" : "Try again" }
+    }
+
+    private var canSave: Bool { !draftFirst.trimmingCharacters(in: .whitespaces).isEmpty }
+
     var body: some View {
         ZStack(alignment: .top) {
             ParchmentBackground()
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 22) {
+                    editProfileSection
                     profileSection
-                    companionSection
                     conversationSection
                     appearanceSection
                     privacySection
@@ -49,6 +75,17 @@ struct SettingsView: View {
         .navigationBarBackButtonHidden(true)
         .toolbar(.hidden, for: .navigationBar)
         .sheet(isPresented: $showDatePicker) { datePickerSheet }
+        .onAppear {
+            guard !prefilled else { return }
+            draftFirst = firstName; draftLast = lastName
+            draftCompanion = companionName
+            draftVoice = selectedVoice; originalVoice = selectedVoice
+            prefilled = true
+        }
+        .onChange(of: draftFirst)     { _, _ in didSave = false; saveError = nil }
+        .onChange(of: draftLast)      { _, _ in didSave = false; saveError = nil }
+        .onChange(of: draftCompanion) { _, _ in didSave = false; saveError = nil }
+        .onChange(of: draftVoice)     { _, _ in didSave = false; saveError = nil }
     }
 
     private var navBar: some View {
@@ -74,10 +111,6 @@ struct SettingsView: View {
     // MARK: Profile
     private var profileSection: some View {
         sectionCard("Profile", hint: "Your identity anchors. Name and birthdate help Witness place every memory in time; place and identity add context.") {
-            textRow("First name", text: $firstName)
-            divider
-            textRow("Last name", text: $lastName)
-            divider
             Button { pickerDate = Self.date(fromISO: birthdateISO) ?? Self.defaultDOB; showDatePicker = true } label: {
                 HStack {
                     Text("Date of birth").font(.system(size: 15)).foregroundStyle(WT.ink.opacity(0.7))
@@ -98,30 +131,28 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: Companion & voice
-    private var companionSection: some View {
-        sectionCard("Companion & voice", hint: "Name your companion and choose how it sounds. You can change these any time.") {
-            textRow("Companion name", text: $companionName)
+    // MARK: Edit profile (name + companion + voice) — the only section that saves to the backend (PUT).
+    private var editProfileSection: some View {
+        sectionCard("Edit profile", hint: "Your name, your companion's name, and the voice it speaks in. These are saved to your account.") {
+            textRow("First name", text: $draftFirst)
+            divider
+            textRow("Last name", text: $draftLast)
+            divider
+            textRow("Companion name", text: $draftCompanion)
             divider
             VStack(alignment: .leading, spacing: 10) {
                 Text("VOICE").font(.system(size: 11, weight: .semibold)).tracking(1.2).foregroundStyle(WT.ink.opacity(0.4))
-                ForEach(VoiceOption.all) { v in voiceRow(v) }
+                ForEach(VoiceOption.all) { v in draftVoiceRow(v) }
             }
             .padding(.vertical, 4)
             divider
-            textRow("Custom voice name (optional)", text: $customVoiceName)
-            divider
-            Toggle(isOn: $voiceConfirm) {
-                settingLabel("Voice confirmation", "Speak a short confirmation after voice actions.")
-            }
-            .tint(WV.teal)
-            .padding(.vertical, 6)
+            saveRow
         }
     }
 
-    private func voiceRow(_ v: VoiceOption) -> some View {
-        let sel = selectedVoice == v.id
-        return Button { withAnimation(.easeOut(duration: 0.15)) { selectedVoice = v.id } } label: {
+    private func draftVoiceRow(_ v: VoiceOption) -> some View {
+        let sel = draftVoice == v.id
+        return Button { withAnimation(.easeOut(duration: 0.15)) { draftVoice = v.id } } label: {
             HStack(spacing: 12) {
                 Image(systemName: "waveform").font(.system(size: 15, weight: .medium))
                     .foregroundStyle(sel ? .white : WV.teal)
@@ -138,6 +169,89 @@ struct SettingsView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+
+    @ViewBuilder private var saveRow: some View {
+        if let e = saveError {
+            VStack(spacing: 10) {
+                Text(e.message)
+                    .font(.system(size: 13)).foregroundStyle(WV.danger)
+                    .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+                Button { handleErrorAction(e) } label: {
+                    Text(e.actionTitle).font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
+                        .frame(maxWidth: .infinity).frame(height: 48)
+                        .background(WV.teal, in: RoundedRectangle(cornerRadius: 14))
+                }
+                .witnessPress()
+            }
+            .padding(.vertical, 6)
+        } else {
+            Button { Task { await saveProfile() } } label: {
+                Group {
+                    if isSaving { ProgressView().tint(.white) }
+                    else if didSave { Label("Saved", systemImage: "checkmark") }
+                    else { Text("Save changes") }
+                }
+                .font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
+                .frame(maxWidth: .infinity).frame(height: 48)
+                .background((canSave && !isSaving) ? WV.teal : WV.teal.opacity(0.4), in: RoundedRectangle(cornerRadius: 14))
+            }
+            .disabled(!canSave || isSaving)
+            .witnessPress()
+            .padding(.vertical, 6)
+        }
+    }
+
+    private func handleErrorAction(_ e: SaveError) {
+        switch e {
+        case .sessionExpired: auth.logout()          // ContentView's isLoggedIn watcher routes to the door
+        default:              Task { await saveProfile() }   // validation/network/generic → retry (drafts preserved)
+        }
+    }
+
+    private func saveProfile() async {
+        saveError = nil; didSave = false; isSaving = true
+        defer { isSaving = false }
+
+        let voiceChanged = draftVoice != originalVoice
+        let cName = draftCompanion.trimmingCharacters(in: .whitespaces)
+        let companion = cName.isEmpty ? Profile.defaultCompanionName : cName
+        let req = ProfileUpdateRequest(
+            firstName: draftFirst.trimmingCharacters(in: .whitespaces),
+            lastName: draftLast.trimmingCharacters(in: .whitespaces),
+            companionName: companion,
+            companionVoice: voiceChanged ? draftVoice : nil,
+            companionPersonality: voiceChanged ? VoiceOption.personality(for: draftVoice) : nil,
+            customVoiceName: voiceChanged ? VoiceOption.geminiName(for: draftVoice) : nil
+        )
+        do {
+            try await auth.updateProfile(req)
+            // Commit locally so the app reflects immediately (companion display + read-aloud/Talk voice).
+            firstName = req.firstName ?? firstName
+            lastName = req.lastName ?? lastName
+            companionName = companion
+            draftCompanion = companion                 // reflect the Scarlett default back into the field
+            if voiceChanged {
+                selectedVoice = draftVoice
+                customVoiceName = VoiceOption.geminiName(for: draftVoice)
+                originalVoice = draftVoice
+            }
+            didSave = true
+        } catch {
+            saveError = Self.mapError(error)           // stay put; drafts preserved
+        }
+    }
+
+    private static func mapError(_ error: Error) -> SaveError {
+        if let api = error as? APIError {
+            switch api {
+            case .unauthorized:   return .sessionExpired
+            case .http(let s, _): return s == 400 ? .validation : .generic
+            case .network:        return .network
+            default:              return .generic
+            }
+        }
+        return .generic
     }
 
     // MARK: Conversation

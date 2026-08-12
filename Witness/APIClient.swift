@@ -56,6 +56,39 @@ final class APIClient {
         try await request(path, method: "POST", body: body, authorized: authorized, timeout: timeout)
     }
 
+    /// PUT that treats any 2xx as success and does NOT decode the response body (the PUT ack shape isn't
+    /// guaranteed — could be {status,...}, empty, or 204). Throws APIError on 401 / non-2xx / transport,
+    /// same as `request(...)`. Returns the raw bytes in case a caller wants to leniently try-decode.
+    @discardableResult
+    func putIgnoringResponseBody<Body: Encodable>(
+        _ path: String, body: Body, authorized: Bool = true, timeout: TimeInterval? = nil
+    ) async throws -> Data {
+        guard let url = URL(string: path, relativeTo: Self.baseURL) else { throw APIError.invalidURL }
+        var req = URLRequest(url: url)
+        req.httpMethod = "PUT"
+        if let timeout { req.timeoutInterval = timeout }
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        do { req.httpBody = try JSONEncoder().encode(body) } catch { throw APIError.encoding(error) }
+        if authorized, let token = tokenProvider() {
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        let data: Data, response: URLResponse
+        do { (data, response) = try await session.data(for: req) }
+        catch { throw APIError.network(error) }
+        guard let http = response as? HTTPURLResponse else {
+            throw APIError.network(URLError(.badServerResponse))
+        }
+        if http.statusCode == 401 {
+            let parsed = try? JSONDecoder().decode(ErrorBody.self, from: data)
+            throw APIError.unauthorized(detail: parsed?.detail, code: parsed?.code)
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw APIError.http(status: http.statusCode, body: String(data: data, encoding: .utf8))
+        }
+        return data   // any 2xx = success
+    }
+
     private func request<Body: Encodable, Response: Decodable>(
         _ path: String, method: String, body: Body?, authorized: Bool, timeout: TimeInterval? = nil
     ) async throws -> Response {

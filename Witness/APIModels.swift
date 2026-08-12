@@ -222,3 +222,24 @@ struct ProfileCreateResponse: Decodable {
         case narratorId = "narrator_id"
     }
 }
+
+/// PUT /api/v1/settings/profile body (partial update). All optional → nil fields are omitted (synthesized
+/// encodeIfPresent), so unmanaged fields are never sent and server-side nulls are avoided. The editor always
+/// sends first_name/last_name/companion_name; it sends the three voice fields ONLY when the voice changed.
+struct ProfileUpdateRequest: Encodable {
+    let firstName: String?
+    let lastName: String?
+    let companionName: String?
+    let companionVoice: String?
+    let companionPersonality: String?
+    let customVoiceName: String?
+
+    enum CodingKeys: String, CodingKey {
+        case firstName = "first_name"
+        case lastName = "last_name"
+        case companionName = "companion_name"
+        case companionVoice = "companion_voice"
+        case companionPersonality = "companion_personality"
+        case customVoiceName = "custom_voice_name"
+    }
+}
