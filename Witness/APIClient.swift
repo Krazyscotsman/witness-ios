@@ -46,8 +46,9 @@ final class APIClient {
     private struct Empty: Encodable {}
 
     func get<Response: Decodable>(_ path: String, authorized: Bool = true, timeout: TimeInterval? = nil,
+                                  decoder: JSONDecoder = JSONDecoder(),
                                   as: Response.Type = Response.self) async throws -> Response {
-        try await request(path, method: "GET", body: Optional<Empty>.none, authorized: authorized, timeout: timeout)
+        try await request(path, method: "GET", body: Optional<Empty>.none, authorized: authorized, timeout: timeout, decoder: decoder)
     }
 
     func post<Body: Encodable, Response: Decodable>(_ path: String, body: Body, authorized: Bool = true,
@@ -90,7 +91,8 @@ final class APIClient {
     }
 
     private func request<Body: Encodable, Response: Decodable>(
-        _ path: String, method: String, body: Body?, authorized: Bool, timeout: TimeInterval? = nil
+        _ path: String, method: String, body: Body?, authorized: Bool, timeout: TimeInterval? = nil,
+        decoder: JSONDecoder = JSONDecoder()
     ) async throws -> Response {
         guard let url = URL(string: path, relativeTo: Self.baseURL) else { throw APIError.invalidURL }
         var req = URLRequest(url: url)
@@ -123,7 +125,7 @@ final class APIClient {
         guard (200..<300).contains(http.statusCode) else {
             throw APIError.http(status: http.statusCode, body: String(data: data, encoding: .utf8))
         }
-        do { return try JSONDecoder().decode(Response.self, from: data) }
+        do { return try decoder.decode(Response.self, from: data) }
         catch { throw APIError.decoding(error) }
     }
 }

@@ -84,6 +84,13 @@ final class AuthManager: ObservableObject {
         _ = try await api.putIgnoringResponseBody("/api/v1/settings/profile", body: body, timeout: 20)
     }
 
+    /// Truth-registry write. PUT /timeline/relationships/{id} (BARE path) — partial update of allowlisted
+    /// columns only. Any 2xx = success (the {status:success|no_change} ack is ignored). Throws APIError; the
+    /// view maps it to friendly copy.
+    func updateRelationship(id: String, _ body: RelationshipUpdateRequest) async throws {
+        _ = try await api.putIgnoringResponseBody("/timeline/relationships/\(id)", body: body, timeout: 20)
+    }
+
     /// Hydrates the app's stored companion identity from the backend (source of truth at launch). Only
     /// overwrites when the backend actually provides a value.
     private func applyProfile(_ p: ProfileDTO) {

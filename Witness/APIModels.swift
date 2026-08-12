@@ -289,3 +289,30 @@ struct LinkedMemory: Decodable, Hashable {
     let role: String?
     // `narrative` omitted on purpose (heavy).
 }
+
+/// PUT /timeline/relationships/{id} body — EXACTLY the 22 editable columns of narrator_relationships,
+/// nothing else. The backend has NO request validation: an unknown/misspelled column throws 500, so making
+/// the type structurally hold only real columns is the defense. Values are pre-sanitized by the view
+/// (snake_case enums, ISO dates, "" for blanks → server NULL). Read-only nbq_response / person_canonical_name
+/// are structurally absent — impossible to send. `nonisolated` because it's encoded in a nonisolated context.
+nonisolated struct RelationshipUpdateRequest: Encodable {
+    let firstName, middleName, lastName, nickname, maidenName: String
+    let relationshipType: String
+    let familyRole, significance: String
+    let startDate, endDate, datePrecision: String
+    let personBirthDate, personBirthDatePrecision, personDeathDate, personDeathDatePrecision: String
+    let howMet, relationshipContext, howEnded, lessonsLearned, notes, appearanceDescription: String
+    let privacyLevel: String
+
+    enum CodingKeys: String, CodingKey {
+        case firstName = "first_name", middleName = "middle_name", lastName = "last_name"
+        case nickname, maidenName = "maiden_name"
+        case relationshipType = "relationship_type", familyRole = "family_role", significance
+        case startDate = "start_date", endDate = "end_date", datePrecision = "date_precision"
+        case personBirthDate = "person_birth_date", personBirthDatePrecision = "person_birth_date_precision"
+        case personDeathDate = "person_death_date", personDeathDatePrecision = "person_death_date_precision"
+        case howMet = "how_met", relationshipContext = "relationship_context", howEnded = "how_ended"
+        case lessonsLearned = "lessons_learned", notes, appearanceDescription = "appearance_description"
+        case privacyLevel = "privacy_level"
+    }
+}

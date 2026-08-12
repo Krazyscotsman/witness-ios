@@ -28,7 +28,7 @@ struct InsightsView: View {
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: InsightItem.self) { item in
                 switch item.id {
-                case "anchors":  AnchorsListView(auth: auth)
+                case "anchors":  AnchorRegistryView(auth: auth)
                 case "timeline": TimelineView()
                 case "memoir":   MemoirView()
                 case "learn":    LearnView()
