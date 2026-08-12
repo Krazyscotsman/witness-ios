@@ -39,7 +39,7 @@ struct MainTabView: View {
             case .home:     HomeView()
             case .memories: MemoriesView(vm: memoriesVM, auth: auth, path: $memoriesPath)
             case .talk:     TalkView()
-            case .insights: InsightsView(path: $insightsPath)
+            case .insights: InsightsView(auth: auth, path: $insightsPath)
             case .you:      YouView(auth: auth, path: $youPath, onSignOut: onSignOut)
             }
         }

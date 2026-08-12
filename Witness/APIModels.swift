@@ -243,3 +243,49 @@ struct ProfileUpdateRequest: Encodable {
         case customVoiceName = "custom_voice_name"
     }
 }
+
+// MARK: - Entities / Anchors (GET /api/v1/entities, GET /api/v1/entities/{id})
+
+/// Summary row from GET /api/v1/entities (returns a top-level ARRAY). No is_anchor filter param exists —
+/// callers filter client-side to isAnchor == true. `type` is a free string (person/place/organization/pet/
+/// vehicle/…); handle unknowns gracefully. Lenient: only `id` is required.
+struct EntitySummary: Decodable, Identifiable, Hashable {
+    let id: String
+    let name: String?
+    let type: String?
+    let memoryCount: Int?
+    let firstSeen: String?
+    let isAnchor: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, type
+        case memoryCount = "memory_count"
+        case firstSeen = "first_seen"
+        case isAnchor = "is_anchor"
+    }
+}
+
+/// GET /api/v1/entities/{id}. `attributes` (untyped dict) is intentionally NOT modeled/decoded.
+struct EntityDetailDTO: Decodable {
+    let id: String?
+    let name: String?
+    let type: String?
+    let isAnchor: Bool?
+    let linkedMemories: [LinkedMemory]?
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, type
+        case isAnchor = "is_anchor"
+        case linkedMemories = "linked_memories"
+        // `attributes` omitted on purpose (untyped dict).
+    }
+}
+
+/// A memory linked to an entity. `narrative` (heavy) is intentionally NOT decoded.
+struct LinkedMemory: Decodable, Hashable {
+    let id: String?
+    let title: String?
+    let date: String?
+    let role: String?
+    // `narrative` omitted on purpose (heavy).
+}

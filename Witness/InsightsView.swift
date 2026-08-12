@@ -3,6 +3,7 @@ import SwiftUI
 // MARK: - Insights: a HUB (per IA map). Anchors opens the real surface; others are
 // placeholders naming their endpoint until built out.
 struct InsightsView: View {
+    @ObservedObject var auth: AuthManager
     @Binding var path: NavigationPath
 
     var body: some View {
@@ -27,7 +28,7 @@ struct InsightsView: View {
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: InsightItem.self) { item in
                 switch item.id {
-                case "anchors":  AnchorsView()
+                case "anchors":  AnchorsListView(auth: auth)
                 case "timeline": TimelineView()
                 case "memoir":   MemoirView()
                 case "learn":    LearnView()
