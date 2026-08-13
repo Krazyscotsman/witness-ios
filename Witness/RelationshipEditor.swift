@@ -108,37 +108,37 @@ struct RelationshipFormView: View {
         VStack(alignment: .leading, spacing: 18) {
             Text(title).font(.serif(26)).foregroundStyle(WT.ink)
 
-            section("Name") {
-                textField("First name", $draft.firstName)
-                textField("Middle name", $draft.middleName)
-                textField("Last name", $draft.lastName)
-                textField("Nickname", $draft.nickname)
-                textField("Maiden name", $draft.maidenName)
+            anchorFormSection("Name") {
+                anchorTextField("First name", $draft.firstName)
+                anchorTextField("Middle name", $draft.middleName)
+                anchorTextField("Last name", $draft.lastName)
+                anchorTextField("Nickname", $draft.nickname)
+                anchorTextField("Maiden name", $draft.maidenName)
             }
-            section("Relationship") {
-                selectField("Relationship type", RelationshipVocab.types, $draft.relationshipType, required: true)
-                selectField("Family role", RelationshipVocab.familyRoles, $draft.familyRole)
-                selectField("Significance", RelationshipVocab.significance, $draft.significance)
+            anchorFormSection("Relationship") {
+                anchorSelectField("Relationship type", RelationshipVocab.types, $draft.relationshipType, required: true)
+                anchorSelectField("Family role", RelationshipVocab.familyRoles, $draft.familyRole)
+                anchorSelectField("Significance", RelationshipVocab.significance, $draft.significance)
             }
-            section("Dates") {
-                dateField("Start date", .start, draft.startDate)
-                dateField("End date", .end, draft.endDate)
-                selectField("Date precision", RelationshipVocab.precision, $draft.datePrecision)
-                dateField("Birth date", .birth, draft.birthDate)
-                selectField("Birth date precision", RelationshipVocab.precision, $draft.birthPrecision)
-                dateField("Death date", .death, draft.deathDate)
-                selectField("Death date precision", RelationshipVocab.precision, $draft.deathPrecision)
+            anchorFormSection("Dates") {
+                anchorDateField("Start date", draft.startDate, onEdit: { activeDateField = .start }, onClear: { setDate(.start, nil) })
+                anchorDateField("End date", draft.endDate, onEdit: { activeDateField = .end }, onClear: { setDate(.end, nil) })
+                anchorSelectField("Date precision", RelationshipVocab.precision, $draft.datePrecision)
+                anchorDateField("Birth date", draft.birthDate, onEdit: { activeDateField = .birth }, onClear: { setDate(.birth, nil) })
+                anchorSelectField("Birth date precision", RelationshipVocab.precision, $draft.birthPrecision)
+                anchorDateField("Death date", draft.deathDate, onEdit: { activeDateField = .death }, onClear: { setDate(.death, nil) })
+                anchorSelectField("Death date precision", RelationshipVocab.precision, $draft.deathPrecision)
             }
-            section("Story & notes") {
-                multiField("How you met", $draft.howMet)
-                multiField("Relationship context", $draft.relationshipContext)
-                multiField("How it ended", $draft.howEnded)
-                multiField("Lessons learned", $draft.lessonsLearned)
-                multiField("Notes", $draft.notes)
-                multiField("Appearance", $draft.appearance)
+            anchorFormSection("Story & notes") {
+                anchorMultiField("How you met", $draft.howMet)
+                anchorMultiField("Relationship context", $draft.relationshipContext)
+                anchorMultiField("How it ended", $draft.howEnded)
+                anchorMultiField("Lessons learned", $draft.lessonsLearned)
+                anchorMultiField("Notes", $draft.notes)
+                anchorMultiField("Appearance", $draft.appearance)
             }
-            section("Privacy") {
-                selectField("Privacy level", RelationshipVocab.privacy, $draft.privacy)
+            anchorFormSection("Privacy") {
+                anchorSelectField("Privacy level", RelationshipVocab.privacy, $draft.privacy)
             }
 
             if let story {   // edit only — read-only, never sent
@@ -166,7 +166,7 @@ struct RelationshipFormView: View {
             }
         }
         .sheet(item: $activeDateField) { f in
-            DateSheet(initial: getDate(f) ?? Date(), floor: RelSanitize.dateFloor) { picked in setDate(f, picked); activeDateField = nil }
+            AnchorDateSheet(initial: getDate(f) ?? Date(), floor: RelSanitize.dateFloor) { picked in setDate(f, picked); activeDateField = nil }
         }
     }
 
@@ -180,79 +180,6 @@ struct RelationshipFormView: View {
         .overlay(RoundedRectangle(cornerRadius: 18).stroke(WT.ink.opacity(0.06), lineWidth: 1))
     }
 
-    // Field builders
-    private func section<Content: View>(_ title: String, @ViewBuilder _ content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title.uppercased()).font(.system(size: 11, weight: .semibold)).tracking(1.4).foregroundStyle(WV.gold)
-            VStack(spacing: 12) { content() }
-        }
-    }
-    private func fieldLabel(_ label: String, required: Bool = false) -> some View {
-        HStack(spacing: 4) {
-            Text(label).font(.system(size: 13, weight: .medium)).foregroundStyle(WT.ink.opacity(0.6))
-            if required { Text("*").font(.system(size: 13, weight: .bold)).foregroundStyle(WV.danger) }
-        }
-    }
-    private func textField(_ label: String, _ binding: Binding<String>) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            fieldLabel(label)
-            TextField(label, text: binding).font(.system(size: 16)).foregroundStyle(WT.ink).tint(WV.teal)
-                .textInputAutocapitalization(.words)
-                .padding(.horizontal, 14).frame(height: 50)
-                .background(Color.white, in: RoundedRectangle(cornerRadius: 12))
-                .overlay(RoundedRectangle(cornerRadius: 12).stroke(WT.ink.opacity(0.12), lineWidth: 1))
-        }
-    }
-    private func multiField(_ label: String, _ binding: Binding<String>) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            fieldLabel(label)
-            TextField(label, text: binding, axis: .vertical).lineLimit(3...8)
-                .font(.serif(16)).foregroundStyle(WT.ink).tint(WV.teal).textInputAutocapitalization(.sentences)
-                .padding(.horizontal, 14).padding(.vertical, 12).frame(minHeight: 50)
-                .background(Color.white, in: RoundedRectangle(cornerRadius: 12))
-                .overlay(RoundedRectangle(cornerRadius: 12).stroke(WT.ink.opacity(0.12), lineWidth: 1))
-        }
-    }
-    private func selectField(_ label: String, _ options: [String], _ binding: Binding<String>, required: Bool = false) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            fieldLabel(label, required: required)
-            Menu {
-                if !required { Button("— None —") { binding.wrappedValue = "" } }
-                ForEach(options, id: \.self) { opt in Button(opt) { binding.wrappedValue = opt } }
-            } label: {
-                HStack {
-                    Text(binding.wrappedValue.isEmpty ? "Select" : binding.wrappedValue)
-                        .font(.system(size: 16)).foregroundStyle(binding.wrappedValue.isEmpty ? WT.ink.opacity(0.4) : WT.ink)
-                    Spacer()
-                    Image(systemName: "chevron.up.chevron.down").font(.system(size: 12)).foregroundStyle(WT.ink.opacity(0.4))
-                }
-                .padding(.horizontal, 14).frame(height: 50)
-                .background(Color.white, in: RoundedRectangle(cornerRadius: 12))
-                .overlay(RoundedRectangle(cornerRadius: 12).stroke(WT.ink.opacity(0.12), lineWidth: 1))
-            }
-        }
-    }
-    private func dateField(_ label: String, _ field: DateField, _ value: Date?) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            fieldLabel(label)
-            HStack {
-                Button { activeDateField = field } label: {
-                    HStack {
-                        Text(value.map { RelSanitize.iso.string(from: $0) } ?? "Add date")
-                            .font(.system(size: 16)).foregroundStyle(value == nil ? WT.ink.opacity(0.4) : WT.ink)
-                        Spacer()
-                        Image(systemName: "calendar").font(.system(size: 14)).foregroundStyle(WV.teal)
-                    }
-                }.buttonStyle(.plain)
-                if value != nil {
-                    Button { setDate(field, nil) } label: { Image(systemName: "xmark.circle.fill").font(.system(size: 16)).foregroundStyle(WT.ink.opacity(0.3)) }.buttonStyle(.plain)
-                }
-            }
-            .padding(.horizontal, 14).frame(height: 50)
-            .background(Color.white, in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(WT.ink.opacity(0.12), lineWidth: 1))
-        }
-    }
     private func getDate(_ f: DateField) -> Date? {
         switch f { case .start: return draft.startDate; case .end: return draft.endDate; case .birth: return draft.birthDate; case .death: return draft.deathDate }
     }
@@ -547,29 +474,3 @@ struct RelationshipDetailView: View {
 }
 
 private extension String { var nib: String? { trimmingCharacters(in: .whitespaces).isEmpty ? nil : self } }
-
-// Small reusable date-picker sheet with a floor date.
-private struct DateSheet: View {
-    let initial: Date
-    let floor: Date
-    let onDone: (Date) -> Void
-    @Environment(\.dismiss) private var dismiss
-    @State private var date: Date
-
-    init(initial: Date, floor: Date, onDone: @escaping (Date) -> Void) {
-        self.initial = initial; self.floor = floor; self.onDone = onDone
-        _date = State(initialValue: max(initial, floor))
-    }
-    var body: some View {
-        VStack(spacing: 16) {
-            Capsule().fill(WT.ink.opacity(0.15)).frame(width: 36, height: 5).padding(.top, 10)
-            DatePicker("", selection: $date, in: floor...Date(), displayedComponents: .date).datePickerStyle(.wheel).labelsHidden()
-            Button { onDone(date); dismiss() } label: {
-                Text("Done").font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
-                    .frame(maxWidth: .infinity).frame(height: 54).background(WV.teal, in: RoundedRectangle(cornerRadius: 16))
-            }
-            .witnessPress().padding(.horizontal, 24).padding(.bottom, 20)
-        }
-        .background(WV.parchment).presentationDetents([.height(420)])
-    }
-}

@@ -317,3 +317,22 @@ nonisolated struct RelationshipWriteRequest: Encodable {
         case privacyLevel = "privacy_level"
     }
 }
+
+/// POST /timeline/locations (create — mints a place entity) AND PUT /timeline/locations/{id} (edit) body —
+/// EXACTLY the 13 editable narrator_locations columns, nothing else (unknown column → 500). Pre-sanitized by
+/// the view (location_type/date_precision → stored lowercase; ISO dates; country is free text, not snake_cased).
+nonisolated struct LocationWriteRequest: Encodable {
+    let locationName: String
+    let locationType: String
+    let streetAddress, city, stateProvince, postalCode, country: String
+    let startDate, endDate, datePrecision: String
+    let reasonForMove, livingSituation, notes: String
+
+    enum CodingKeys: String, CodingKey {
+        case locationName = "location_name", locationType = "location_type"
+        case streetAddress = "street_address", city, stateProvince = "state_province"
+        case postalCode = "postal_code", country
+        case startDate = "start_date", endDate = "end_date", datePrecision = "date_precision"
+        case reasonForMove = "reason_for_move", livingSituation = "living_situation", notes
+    }
+}

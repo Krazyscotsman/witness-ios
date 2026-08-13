@@ -97,6 +97,14 @@ final class AuthManager: ObservableObject {
         _ = try await api.postIgnoringResponseBody("/timeline/relationships", body: body, timeout: 20)
     }
 
+    /// Locations write (Group A). PUT edits; POST creates and mints a place entity. Bare paths, any-2xx.
+    func updateLocation(id: String, _ body: LocationWriteRequest) async throws {
+        _ = try await api.putIgnoringResponseBody("/timeline/locations/\(id)", body: body, timeout: 20)
+    }
+    func createLocation(_ body: LocationWriteRequest) async throws {
+        _ = try await api.postIgnoringResponseBody("/timeline/locations", body: body, timeout: 20)
+    }
+
     /// Hydrates the app's stored companion identity from the backend (source of truth at launch). Only
     /// overwrites when the backend actually provides a value.
     private func applyProfile(_ p: ProfileDTO) {

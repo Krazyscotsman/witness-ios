@@ -63,7 +63,7 @@ struct AnchorRegistryView: View {
     @ViewBuilder private func destination(for c: AnchorCategory) -> some View {
         switch c.id {
         case "relationships": AnchorRelationshipsView(vm: vm, auth: auth, category: c)
-        case "locations":  AnchorRecordListView(title: c.label, category: c, rows: vm.locations)
+        case "locations":  LocationListView(vm: vm, auth: auth)
         case "jobs":       AnchorRecordListView(title: c.label, category: c, rows: vm.jobs)
         case "education":  AnchorRecordListView(title: c.label, category: c, rows: vm.education)
         case "pets":       AnchorRecordListView(title: c.label, category: c, rows: vm.pets)

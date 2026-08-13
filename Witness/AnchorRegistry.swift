@@ -101,7 +101,7 @@ nonisolated struct LocationRow: Decodable, AnchorRow {
     var locationName: String? = nil, locationType: String? = nil
     var streetAddress: String? = nil, city: String? = nil, stateProvince: String? = nil
     var country: String? = nil, postalCode: String? = nil
-    var startDate: String? = nil, endDate: String? = nil
+    var startDate: String? = nil, endDate: String? = nil, datePrecision: String? = nil
     var reasonForMove: String? = nil, livingSituation: String? = nil, notes: String? = nil
     var createdAt: String? = nil
     var displayName: String { locationName?.nilIfEmpty ?? "Untitled" }
