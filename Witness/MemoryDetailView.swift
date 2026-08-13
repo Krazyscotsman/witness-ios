@@ -59,8 +59,8 @@ struct MemoryDetailView: View {
         }
         .onDisappear { audioPlayer.stop(); speaker.stop() }
         .sheet(isPresented: $showAsk) {
-            // Memory-scoped "Ask Scarlett" — opens TalkView about this memory (real server id + title).
-            TalkView(memory: vm.detail)
+            // Memory-scoped "Ask Scarlett" — real Jarvis witness session about this memory.
+            AskScarlettView(memory: vm.detail, auth: auth)
         }
     }
 

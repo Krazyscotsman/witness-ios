@@ -395,3 +395,39 @@ nonisolated struct PetWriteRequest: Encodable {
         case howAcquired = "how_acquired", personality, significance, notes
     }
 }
+
+// MARK: - Jarvis witness session (Ask Scarlett — memory-scoped exploration)
+
+nonisolated struct WitnessStartRequest: Encodable {
+    let memoryId: String
+    let voiceMode: Bool
+    enum CodingKeys: String, CodingKey { case memoryId = "memory_id", voiceMode = "voice_mode" }
+}
+nonisolated struct WitnessStartResponse: Decodable {
+    let sessionId: String?
+    let conversationId: String?
+    let openingMessage: String?
+    let contextSummary: String?
+    enum CodingKeys: String, CodingKey {
+        case sessionId = "session_id", conversationId = "conversation_id"
+        case openingMessage = "opening_message", contextSummary = "context_summary"
+    }
+}
+nonisolated struct WitnessTurnRequest: Encodable { let content: String }
+nonisolated struct WitnessTurnResponse: Decodable {
+    let response: String?
+    let turnNumber: Int?
+    let responseType: String?
+    // discoveries / new_entities are ALWAYS null — intentionally NOT modeled (no per-turn "what changed" UI).
+    enum CodingKeys: String, CodingKey { case response, turnNumber = "turn_number", responseType = "response_type" }
+}
+nonisolated struct WitnessEndResponse: Decodable {
+    let status: String?
+    let sessionId: String?
+    let turns: Int?
+    let closingMessage: String?
+    let summary: String?
+    enum CodingKeys: String, CodingKey {
+        case status, sessionId = "session_id", turns, closingMessage = "closing_message", summary
+    }
+}
