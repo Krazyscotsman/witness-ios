@@ -644,3 +644,47 @@ nonisolated struct MediaItemDTO: Decodable, Identifiable {
     // `metadata` omitted on purpose (loose/untyped).
 }
 nonisolated struct MediaURLResponse: Decodable { let url: String? }   // GET /api/v1/media/{id}/url (presign refresh)
+
+// MARK: - Graph (GET /api/v1/graph) — relationship/entity map. Decoded with .convertFromSnakeCase. Precomputed
+// styling (color/border_color/size/line_style/width) is decoded but INTENTIONALLY UNUSED — the app palette
+// (RelGroup + WV/WT) drives rendering. `nonisolated`: decoded off-main in APIClient.
+nonisolated struct GraphResponse: Decodable {
+    let narratorId: String?
+    let narratorNodeId: String?
+    let nodes: [GraphNode]?
+    let edges: [GraphEdge]?
+    let stats: GraphStats?
+}
+nonisolated struct GraphNode: Decodable {
+    let id: String
+    let label: String?
+    let type: String?
+    let isAnchor: Bool?
+    let isNarrator: Bool?
+    let memoryCount: Int?
+    let aliases: [String]?
+    let nameComplete: String?
+    let anchorRelType: String?
+    let birthDate: String?
+    let deathDate: String?
+    let color: String?
+    let borderColor: String?
+    let size: Double?          // precomputed; unused (app palette instead)
+}
+nonisolated struct GraphEdge: Decodable {
+    let id: String?
+    let source: String
+    let target: String
+    let relationshipType: String?
+    let strength: Double?
+    let memoryCount: Int?
+    let lineStyle: String?
+    let color: String?
+    let width: Double?         // precomputed; unused
+    let label: String?
+}
+nonisolated struct GraphStats: Decodable {
+    let totalNodes: Int?
+    let totalEdges: Int?
+    let anchorCount: Int?
+}

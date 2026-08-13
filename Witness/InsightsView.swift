@@ -33,7 +33,7 @@ struct InsightsView: View {
                 case "memoir":   MemoirView()
                 case "learn":    LearnView()
                 case "explain":  ExplainView(auth: auth)
-                case "graph":    GraphView()
+                case "graph":    GraphView(auth: auth)
                 case "media":    MediaView(auth: auth)
                 default:         InsightSurfaceView(item: item)
                 }

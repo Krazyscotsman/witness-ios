@@ -5,24 +5,74 @@ import Combine
 // GET /api/v1/graph -> { nodes, edges, stats }. Sample graph here.
 struct GraphView: View {
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var layout = GraphLayout(nodes: GNode.samples, edges: GEdge.samples)
+    @ObservedObject var auth: AuthManager
+    @StateObject private var layout = GraphLayout(nodes: [], edges: [])
+    @StateObject private var vm = GraphViewModel()
     @State private var enabled: Set<String> = ["family","romantic","friend","professional","pet"]
     @State private var selected: GNode?
 
     var body: some View {
         ZStack(alignment: .top) {
             ParchmentBackground()
-            VStack(spacing: 0) {
-                Color.clear.frame(height: 52)
-                header
-                canvas
-                controls
+            Group {
+                switch vm.state {
+                case .idle, .loading: centered { loadingBlock }
+                case .empty:          centered { emptyBlock }
+                case .unavailable:    centered { unavailableBlock }
+                case .failed(let m):  centered { failedBlock(m) }
+                case .loaded:
+                    VStack(spacing: 0) {
+                        Color.clear.frame(height: 52)
+                        header
+                        canvas
+                        controls
+                    }
+                }
             }
             navBar
         }
         .navigationBarBackButtonHidden(true).toolbar(.hidden, for: .navigationBar)
         .sheet(item: $selected) { nodeDetail($0) }
         .onChange(of: enabled) { _, _ in layout.wake() }
+        .task { await vm.load(auth: auth); applyIfLoaded() }
+    }
+
+    private func applyIfLoaded() { if vm.state == .loaded { layout.setGraph(nodes: vm.nodes, edges: vm.edges) } }
+    private func centered<V: View>(@ViewBuilder _ content: () -> V) -> some View {
+        VStack { Spacer(); content(); Spacer() }.frame(maxWidth: .infinity).padding(.top, 52)
+    }
+
+    private var loadingBlock: some View {
+        VStack(spacing: 12) {
+            ProgressView().tint(WV.teal)
+            Text("Mapping your connections…").font(.serif(18)).foregroundStyle(WT.ink.opacity(0.7))
+        }
+    }
+    private var emptyBlock: some View {
+        infoBlock(icon: "point.3.connected.trianglepath.dotted", title: "Not enough connections yet",
+                  body: "As you record memories with the people in them, your relationship map will take shape here.")
+    }
+    private var unavailableBlock: some View {
+        infoBlock(icon: "point.3.connected.trianglepath.dotted", title: "Graph unavailable",
+                  body: "This view isn’t available right now. Please try again later.")
+    }
+    private func failedBlock(_ m: String) -> some View {
+        VStack(spacing: 12) {
+            Image(systemName: "exclamationmark.triangle").font(.system(size: 28)).foregroundStyle(WV.danger.opacity(0.8))
+            Text(m).font(.system(size: 15)).foregroundStyle(WT.ink.opacity(0.7)).multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true).padding(.horizontal, 40)
+            Button { Task { await vm.refresh(auth: auth); applyIfLoaded() } } label: {
+                HStack(spacing: 6) { Image(systemName: "arrow.clockwise").font(.system(size: 13, weight: .semibold)); Text("Try again").font(.system(size: 15, weight: .medium)) }.foregroundStyle(WV.teal)
+            }.witnessPress()
+        }
+    }
+    private func infoBlock(icon: String, title: String, body: String) -> some View {
+        VStack(spacing: 10) {
+            Image(systemName: icon).font(.system(size: 30)).foregroundStyle(WT.ink.opacity(0.25))
+            Text(title).font(.serif(20)).foregroundStyle(WT.ink)
+            Text(body).font(.system(size: 14)).foregroundStyle(WT.ink.opacity(0.55)).multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true).padding(.horizontal, 36)
+        }
     }
 
     private var navBar: some View {
@@ -43,7 +93,7 @@ struct GraphView: View {
 
     private var header: some View {
         HStack(spacing: 14) {
-            stat("\(layout.nodes.count)", "People")
+            stat("\(layout.nodes.count)", "Nodes")
             stat("\(visibleEdges.count)", "Bonds")
             stat("\(layout.nodes.filter { $0.isAnchor }.count)", "Anchors")
             Spacer()
@@ -171,7 +221,7 @@ struct GraphView: View {
     private var visibleEdges: [GEdge] {
         layout.edges.filter { e in
             guard enabled.contains(RelGroup.key(for: e.relType)) else { return false }
-            if layout.mode == .ego { return e.source == GNode.narratorID || e.target == GNode.narratorID }
+            if layout.mode == .ego { guard let nid = layout.narratorID else { return false }; return e.source == nid || e.target == nid }
             return true
         }
     }
@@ -265,7 +315,8 @@ struct GEdge: Identifiable {
 // MARK: - Force-directed layout engine
 final class GraphLayout: ObservableObject {
     @Published var nodes: [GNode]
-    let edges: [GEdge]
+    private(set) var edges: [GEdge]
+    private(set) var narratorID: String?
     var mode: GraphMode = .ego
     private(set) var size: CGSize = .zero
     private var timer: AnyCancellable?
@@ -273,6 +324,16 @@ final class GraphLayout: ObservableObject {
     private var calm = 0
 
     init(nodes: [GNode], edges: [GEdge]) { self.nodes = nodes; self.edges = edges }
+
+    /// Swap in a freshly loaded graph and re-seed the layout — reuses the existing physics engine (no rebuild).
+    func setGraph(nodes: [GNode], edges: [GEdge]) {
+        self.nodes = nodes
+        self.edges = edges
+        self.narratorID = nodes.first { $0.isNarrator }?.id
+        self.seeded = false
+        self.calm = 0
+        if size != .zero { configure(size: size); wake() }
+    }
 
     func node(_ id: String) -> GNode? { nodes.first { $0.id == id } }
     private func idx(_ id: String) -> Int? { nodes.firstIndex { $0.id == id } }
