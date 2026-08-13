@@ -336,3 +336,25 @@ nonisolated struct LocationWriteRequest: Encodable {
         case reasonForMove = "reason_for_move", livingSituation = "living_situation", notes
     }
 }
+
+/// POST /timeline/jobs (create — mints an organization entity) AND PUT /timeline/jobs/{id} (edit) body —
+/// EXACTLY the 17 editable narrator_employment columns, nothing else (unknown column → 500). Pre-sanitized by
+/// the view (employment_type/work_mode/date_precision → stored lowercase via snakeKey; ISO dates; text as-is).
+nonisolated struct JobWriteRequest: Encodable {
+    let employerName: String
+    let employerIndustry, workLocation, jobTitle, department: String
+    let employmentType, workMode: String
+    let startDate, endDate, datePrecision: String
+    let reasonForJoining, reasonForLeaving, keyResponsibilities, majorAchievements: String
+    let skillsGained, certificationsEarned, notes: String
+
+    enum CodingKeys: String, CodingKey {
+        case employerName = "employer_name", employerIndustry = "employer_industry"
+        case workLocation = "work_location", jobTitle = "job_title", department
+        case employmentType = "employment_type", workMode = "work_mode"
+        case startDate = "start_date", endDate = "end_date", datePrecision = "date_precision"
+        case reasonForJoining = "reason_for_joining", reasonForLeaving = "reason_for_leaving"
+        case keyResponsibilities = "key_responsibilities", majorAchievements = "major_achievements"
+        case skillsGained = "skills_gained", certificationsEarned = "certifications_earned", notes
+    }
+}

@@ -64,7 +64,7 @@ struct AnchorRegistryView: View {
         switch c.id {
         case "relationships": AnchorRelationshipsView(vm: vm, auth: auth, category: c)
         case "locations":  LocationListView(vm: vm, auth: auth)
-        case "jobs":       AnchorRecordListView(title: c.label, category: c, rows: vm.jobs)
+        case "jobs":       JobListView(vm: vm, auth: auth)
         case "education":  AnchorRecordListView(title: c.label, category: c, rows: vm.education)
         case "pets":       AnchorRecordListView(title: c.label, category: c, rows: vm.pets)
         case "hobbies":    AnchorRecordListView(title: c.label, category: c, rows: vm.hobbies)

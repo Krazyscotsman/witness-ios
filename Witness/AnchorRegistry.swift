@@ -129,7 +129,7 @@ nonisolated struct JobRow: Decodable, AnchorRow {
     var employerName: String? = nil, employerIndustry: String? = nil, workLocation: String? = nil
     var jobTitle: String? = nil, department: String? = nil
     var employmentType: String? = nil, workMode: String? = nil
-    var startDate: String? = nil, endDate: String? = nil
+    var startDate: String? = nil, endDate: String? = nil, datePrecision: String? = nil
     var reasonForJoining: String? = nil, reasonForLeaving: String? = nil
     var keyResponsibilities: String? = nil, majorAchievements: String? = nil
     var skillsGained: String? = nil, certificationsEarned: String? = nil, notes: String? = nil
