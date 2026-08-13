@@ -1,44 +1,60 @@
 import SwiftUI
 import UIKit
 
-// MARK: - Media Gallery (web: /dashboard/media). Items grouped by memory.
-//   GET    /api/v1/media/gallery?type=&search=   (list)
-//   GET    /api/v1/media/{id}/file               (open)
-//   DELETE /api/v1/media/{id}                    (remove)
-// Captured media (camera/library) shows live in "Recently added" via MediaStore.
+// MARK: - Media Gallery (read side). Real data: GET /api/v1/media/gallery (grouped by memory, rendered by
+// file_type). Images load via AsyncImage from a resolved url; on load failure we fetch a fresh presigned url
+// once and retry (expiry recovery + the Bearer workaround for relative /file urls). Local capture ("Recently
+// added", MediaStore) stays as a pending-upload staging area; upload + delete are separate/later.
 struct MediaView: View {
+    @ObservedObject var auth: AuthManager
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var store = MediaStore.shared
-    @State private var groups: [MediaGroup] = MediaGroup.samples
-    @State private var filter: MediaKind? = nil
+    @StateObject private var vm = MediaViewModel()
+    @StateObject private var audio = AudioPlayer()
+
+    @State private var typeFilter: String? = nil     // nil = All, else "image"/"video"/"audio"/"document"
     @State private var rows = false
     @State private var search = ""
-    @State private var selecting = false
-    @State private var selected: Set<String> = []
-    @State private var lightbox: MediaItem?
+    @State private var lightbox: MediaItemDTO?
+    @State private var playingID: String?
 
-    private var masonryCols: [GridItem] { [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)] }
+    private var cols: [GridItem] { [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)] }
 
     var body: some View {
         ZStack(alignment: .top) {
             ParchmentBackground()
-            ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 18) {
-                    headerBlock
-                    typeFilter
-                    controlsRow
-                    if visibleGroups.isEmpty { emptyState }
-                    else { ForEach(visibleGroups, id: \.title) { group($0) } }
+            Group {
+                switch vm.state {
+                case .idle, .loading: loadingState
+                case .failed(let m):  failedState(m)
+                case .loaded:         content
                 }
-                .padding(.horizontal, 20).padding(.top, 60).padding(.bottom, selecting ? 90 : 110)
             }
             navBar
-            if selecting { selectionBar }
         }
         .navigationBarBackButtonHidden(true).toolbar(.hidden, for: .navigationBar)
+        .task { await vm.load(auth: auth) }
         .overlay { if let item = lightbox { lightboxView(item) } }
+        .onDisappear { audio.stop() }
     }
 
+    private var content: some View {
+        ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 18) {
+                headerBlock
+                typeFilterRow
+                controlsRow
+                if let rec = recentlyAdded { localSection(rec) }
+                let sections = visibleSections
+                if sections.isEmpty && recentlyAdded == nil { emptyState }
+                else { ForEach(sections) { section($0) } }
+            }
+            .padding(.horizontal, 20).padding(.top, 60).padding(.bottom, 110)
+        }
+        .refreshable { await vm.refresh(auth: auth) }
+    }
+
+    // MARK: nav + header
     private var navBar: some View {
         HStack(spacing: 8) {
             Button { dismiss() } label: {
@@ -47,10 +63,7 @@ struct MediaView: View {
                     .overlay(Circle().stroke(WT.ink.opacity(0.08), lineWidth: 1))
             }.witnessPress()
             Spacer()
-            if !selecting { CaptureControl(style: .addButton) { store.add($0) } }
-            Button { withAnimation { selecting.toggle(); selected.removeAll() } } label: {
-                Text(selecting ? "Done" : "Select").font(.system(size: 15, weight: .medium)).foregroundStyle(WV.teal).frame(height: 44)
-            }.witnessPress()
+            CaptureControl(style: .addButton) { store.add($0) }   // local staging; upload wired later
         }
         .padding(.horizontal, 16).background(WV.parchment.opacity(0.96))
     }
@@ -64,11 +77,14 @@ struct MediaView: View {
         }
     }
 
-    private var typeFilter: some View {
+    private var typeFilterRow: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                chip("All", active: filter == nil) { filter = nil }
-                ForEach(MediaKind.allCases, id: \.self) { k in chip(k.plural, active: filter == k) { filter = k } }
+                chip("All", active: typeFilter == nil) { typeFilter = nil }
+                chip("Photos", active: typeFilter == "image") { typeFilter = "image" }
+                chip("Video", active: typeFilter == "video") { typeFilter = "video" }
+                chip("Audio", active: typeFilter == "audio") { typeFilter = "audio" }
+                chip("Documents", active: typeFilter == "document") { typeFilter = "document" }
             }
         }
     }
@@ -99,101 +115,151 @@ struct MediaView: View {
         }
     }
 
-    private func group(_ g: MediaGroup) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(g.title).font(.serif(20)).foregroundStyle(WT.ink)
-                if let sub = g.subtitle { Text(sub).font(.system(size: 12)).foregroundStyle(WT.ink.opacity(0.5)) }
-            }
-            let items = filteredItems(g)
-            if rows { VStack(spacing: 10) { ForEach(items) { tile($0, big: true) } } }
-            else { LazyVGrid(columns: masonryCols, spacing: 8) { ForEach(items) { tile($0, big: false) } } }
+    // MARK: sections (grouped by memory, backend order preserved)
+    struct MediaSection: Identifiable { let id: String; let title: String; let subtitle: String?; let items: [MediaItemDTO] }
+
+    private var visibleSections: [MediaSection] {
+        let q = search.lowercased().trimmingCharacters(in: .whitespaces)
+        let filtered = vm.items.filter { it in
+            (typeFilter == nil || (it.fileType ?? "") == typeFilter) &&
+            (q.isEmpty || (it.fileName ?? "").lowercased().contains(q) || (it.memoryTitle ?? "").lowercased().contains(q))
+        }
+        var order: [String] = []
+        var buckets: [String: [MediaItemDTO]] = [:]
+        for it in filtered {
+            let k = it.memoryId ?? "__unlinked__"
+            if buckets[k] == nil { buckets[k] = []; order.append(k) }
+            buckets[k]?.append(it)
+        }
+        return order.map { k in
+            let items = buckets[k] ?? []
+            let title = (k == "__unlinked__") ? "Unlinked media" : (items.first?.memoryTitle ?? "Untitled memory")
+            return MediaSection(id: k, title: title, subtitle: subtitle(items.first), items: items)
+        }
+    }
+    private func subtitle(_ it: MediaItemDTO?) -> String? {
+        guard let it else { return nil }
+        switch (it.memoryDate, it.narratorAge) {
+        case let (d?, a?): return "\(d) · age \(a)"
+        case let (d?, nil): return d
+        case let (nil, a?): return "age \(a)"
+        default: return nil
         }
     }
 
-    private func tile(_ item: MediaItem, big: Bool) -> some View {
-        let isSel = selected.contains(item.id)
-        return Button {
-            if selecting { toggle(item) } else { lightbox = item }
-        } label: {
+    private func section(_ s: MediaSection) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(s.title).font(.serif(20)).foregroundStyle(WT.ink)
+                if let sub = s.subtitle { Text(sub).font(.system(size: 12)).foregroundStyle(WT.ink.opacity(0.5)) }
+            }
+            if rows { VStack(spacing: 10) { ForEach(s.items) { tile($0, big: true) } } }
+            else { LazyVGrid(columns: cols, spacing: 8) { ForEach(s.items) { tile($0, big: false) } } }
+        }
+    }
+
+    // MARK: tile — render by file_type
+    private func tile(_ item: MediaItemDTO, big: Bool) -> some View {
+        let h: CGFloat = big ? 180 : 110
+        return Button { onTap(item) } label: {
             ZStack(alignment: .bottomLeading) {
-                if let ui = item.image {
-                    Image(uiImage: ui).resizable().scaledToFill()
-                } else {
-                    LinearGradient(colors: [item.kind.tone.opacity(0.30), item.kind.tone.opacity(0.12)], startPoint: .topLeading, endPoint: .bottomTrailing)
-                    Image(systemName: item.kind.icon).font(.system(size: big ? 40 : 26, weight: .light)).foregroundStyle(item.kind.tone.opacity(0.8))
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-                if item.kind == .video {
+                switch (item.fileType ?? "") {
+                case "image":
+                    MediaThumb(item: item, vm: vm, auth: auth)
+                case "video":
+                    placeholderFill(tone: Color(hex: 0x6b5b95), icon: "play.rectangle.fill", big: big)
                     Image(systemName: "play.circle.fill").font(.system(size: big ? 34 : 22)).foregroundStyle(.white.opacity(0.9))
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                case "audio":
+                    placeholderFill(tone: Color(hex: 0xb08828), icon: "waveform", big: big)
+                    Image(systemName: playingID == item.id ? "pause.circle.fill" : "play.circle.fill")
+                        .font(.system(size: big ? 34 : 22)).foregroundStyle(.white.opacity(0.95))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                default:
+                    placeholderFill(tone: WT.ink.opacity(0.4), icon: "doc.fill", big: big)
                 }
-                if big && item.image == nil {
-                    Text(item.fileName).font(.system(size: 12, weight: .medium)).foregroundStyle(WT.ink.opacity(0.7))
-                        .padding(8).background(.ultraThinMaterial, in: Capsule()).padding(10)
-                }
-                if selecting {
-                    Image(systemName: isSel ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 22)).foregroundStyle(isSel ? WV.teal : .white)
-                        .padding(8).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                if big, (item.fileType ?? "") != "image", let name = item.fileName {
+                    Text(name).font(.system(size: 12, weight: .medium)).foregroundStyle(WT.ink.opacity(0.7))
+                        .lineLimit(1).padding(8).background(.ultraThinMaterial, in: Capsule()).padding(10)
                 }
             }
-            .frame(height: big ? 180 : 110).frame(maxWidth: .infinity)
+            .frame(height: h).frame(maxWidth: .infinity)
             .clipShape(RoundedRectangle(cornerRadius: big ? 18 : 12))
-            .overlay(RoundedRectangle(cornerRadius: big ? 18 : 12).stroke(isSel ? WV.teal : WT.ink.opacity(0.06), lineWidth: isSel ? 2 : 1))
+            .overlay(RoundedRectangle(cornerRadius: big ? 18 : 12).stroke(WT.ink.opacity(0.06), lineWidth: 1))
         }
         .buttonStyle(.plain)
     }
-
-    private var selectionBar: some View {
-        VStack {
-            Spacer()
-            HStack {
-                Text("\(selected.count) selected").font(.system(size: 15, weight: .medium)).foregroundStyle(WT.ink)
-                Spacer()
-                Button(role: .destructive) { deleteSelected() } label: {
-                    HStack(spacing: 6) { Image(systemName: "trash"); Text("Delete") }
-                        .font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
-                        .padding(.horizontal, 18).frame(height: 44)
-                        .background(selected.isEmpty ? WV.danger.opacity(0.4) : WV.danger, in: Capsule())
-                }
-                .witnessPress().disabled(selected.isEmpty)
-            }
-            .padding(.horizontal, 20).padding(.vertical, 12)
-            .background(Color.white.overlay(alignment: .top) { Rectangle().fill(WT.ink.opacity(0.06)).frame(height: 1) }.ignoresSafeArea(edges: .bottom))
+    private func placeholderFill(tone: Color, icon: String, big: Bool) -> some View {
+        ZStack {
+            LinearGradient(colors: [tone.opacity(0.30), tone.opacity(0.12)], startPoint: .topLeading, endPoint: .bottomTrailing)
+            Image(systemName: icon).font(.system(size: big ? 40 : 26, weight: .light)).foregroundStyle(tone.opacity(0.85))
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func lightboxView(_ item: MediaItem) -> some View {
+    private func onTap(_ item: MediaItemDTO) {
+        switch (item.fileType ?? "") {
+        case "audio": Task { await toggleAudio(item) }
+        default:      lightbox = item
+        }
+    }
+    private func toggleAudio(_ item: MediaItemDTO) async {
+        if playingID == item.id { audio.stop(); playingID = nil; return }
+        // Prefer a fresh presigned url — AVAudioPlayer can't send Bearer for a relative /file url.
+        let raw = await vm.refreshURL(for: item.id, auth: auth) ?? item.url
+        guard let u = vm.resolvedURL(raw) else { return }
+        audio.load(u); audio.play(); playingID = item.id
+    }
+
+    // MARK: local staging ("Recently added") — captured this session, pending upload
+    private var recentlyAdded: [CapturedMedia]? { store.captured.isEmpty ? nil : store.captured }
+    private func localSection(_ items: [CapturedMedia]) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Recently added").font(.serif(20)).foregroundStyle(WT.ink)
+                Text("On this device — pending upload.").font(.system(size: 12)).foregroundStyle(WT.ink.opacity(0.5))
+            }
+            LazyVGrid(columns: cols, spacing: 8) { ForEach(items) { localTile($0) } }
+        }
+    }
+    private func localTile(_ c: CapturedMedia) -> some View {
+        ZStack {
+            if let ui = c.image {
+                Image(uiImage: ui).resizable().scaledToFill()
+            } else {
+                placeholderFill(tone: c.kind.tone, icon: c.kind.icon, big: false)
+            }
+            if c.kind == .video {
+                Image(systemName: "play.circle.fill").font(.system(size: 22)).foregroundStyle(.white.opacity(0.9))
+            }
+        }
+        .frame(height: 110).frame(maxWidth: .infinity)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(WT.ink.opacity(0.06), lineWidth: 1))
+    }
+
+    // MARK: read-only lightbox (image full / video + doc info; audio plays inline from its tile)
+    private func lightboxView(_ item: MediaItemDTO) -> some View {
         ZStack {
             Color.black.opacity(0.92).ignoresSafeArea().onTapGesture { lightbox = nil }
             VStack(spacing: 18) {
                 ZStack {
-                    if let ui = item.image {
-                        Image(uiImage: ui).resizable().scaledToFit()
+                    if (item.fileType ?? "") == "image" {
+                        MediaThumb(item: item, vm: vm, auth: auth, fit: true)
                     } else {
-                        LinearGradient(colors: [item.kind.tone.opacity(0.4), item.kind.tone.opacity(0.15)], startPoint: .topLeading, endPoint: .bottomTrailing)
-                        Image(systemName: item.kind.icon).font(.system(size: 70, weight: .light)).foregroundStyle(.white.opacity(0.85))
-                    }
-                    if item.kind == .video {
-                        Image(systemName: "play.circle.fill").font(.system(size: 56)).foregroundStyle(.white.opacity(0.9))
+                        let tone: Color = (item.fileType ?? "") == "video" ? Color(hex: 0x6b5b95) : WT.ink.opacity(0.5)
+                        let icon: String = (item.fileType ?? "") == "video" ? "play.rectangle.fill" : "doc.fill"
+                        LinearGradient(colors: [tone.opacity(0.4), tone.opacity(0.15)], startPoint: .topLeading, endPoint: .bottomTrailing)
+                        Image(systemName: icon).font(.system(size: 70, weight: .light)).foregroundStyle(.white.opacity(0.85))
+                        if (item.fileType ?? "") == "video" {
+                            Image(systemName: "play.circle.fill").font(.system(size: 56)).foregroundStyle(.white.opacity(0.9))
+                        }
                     }
                 }
                 .frame(height: 320).clipShape(RoundedRectangle(cornerRadius: 22)).padding(.horizontal, 24)
                 VStack(spacing: 4) {
-                    Text(item.fileName).font(.serif(20)).foregroundStyle(.white)
+                    Text(item.fileName ?? "Untitled file").font(.serif(20)).foregroundStyle(.white)
                     if let m = item.memoryTitle { Text("from “\(m)”").font(.system(size: 14)).foregroundStyle(.white.opacity(0.6)) }
-                }
-                HStack(spacing: 12) {
-                    Button { /* TODO: GET /api/v1/media/\(item.id)/file */ } label: {
-                        HStack(spacing: 6) { Image(systemName: "arrow.up.forward.app"); Text("Open file") }
-                            .font(.system(size: 15, weight: .semibold)).foregroundStyle(.black)
-                            .padding(.horizontal, 18).frame(height: 48).background(.white, in: Capsule())
-                    }.witnessPress()
-                    Button(role: .destructive) { delete(item) } label: {
-                        Image(systemName: "trash").font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
-                            .frame(width: 48, height: 48).background(WV.danger, in: Circle())
-                    }.witnessPress()
                 }
             }
             VStack {
@@ -210,46 +276,42 @@ struct MediaView: View {
         }
     }
 
+    // MARK: states
+    private var loadingState: some View {
+        VStack(spacing: 12) {
+            Spacer()
+            ProgressView().tint(WV.teal)
+            Text("Gathering your media…").font(.serif(18)).foregroundStyle(WT.ink.opacity(0.7))
+            Spacer(); Spacer()
+        }
+        .frame(maxWidth: .infinity)
+    }
+    private func failedState(_ m: String) -> some View {
+        VStack(spacing: 12) {
+            Spacer()
+            Image(systemName: "exclamationmark.triangle").font(.system(size: 28)).foregroundStyle(WV.danger.opacity(0.8))
+            Text(m).font(.system(size: 15)).foregroundStyle(WT.ink.opacity(0.7)).multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true).padding(.horizontal, 40)
+            Button { Task { await vm.refresh(auth: auth) } } label: {
+                HStack(spacing: 6) { Image(systemName: "arrow.clockwise").font(.system(size: 13, weight: .semibold)); Text("Try again").font(.system(size: 15, weight: .medium)) }.foregroundStyle(WV.teal)
+            }.witnessPress()
+            Spacer(); Spacer()
+        }
+        .frame(maxWidth: .infinity)
+    }
     private var emptyState: some View {
         VStack(spacing: 12) {
             Image(systemName: "photo.on.rectangle.angled").font(.system(size: 34)).foregroundStyle(WT.ink.opacity(0.25))
-            Text("No media here yet").font(.serif(20)).foregroundStyle(WT.ink)
-            Text("Tap + to take a photo or video, or add photos to a memory.")
+            Text("No media yet").font(.serif(20)).foregroundStyle(WT.ink)
+            Text("Photos, videos, and recordings attached to your memories will gather here.")
                 .font(.system(size: 14)).foregroundStyle(WT.ink.opacity(0.55)).multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true).padding(.horizontal, 30)
         }
         .frame(maxWidth: .infinity).padding(.top, 40)
     }
-
-    // MARK: data
-    private var recentlyAdded: MediaGroup? {
-        guard !store.captured.isEmpty else { return nil }
-        return MediaGroup(title: "Recently added", date: nil, age: nil,
-                          items: store.captured.map { MediaItem(id: $0.id, fileName: $0.fileName, kind: $0.kind, memoryTitle: nil, image: $0.image) })
-    }
-    private var allGroups: [MediaGroup] { (recentlyAdded.map { [$0] } ?? []) + groups }
-    private func filteredItems(_ g: MediaGroup) -> [MediaItem] {
-        let q = search.lowercased().trimmingCharacters(in: .whitespaces)
-        return g.items.filter { item in
-            (filter == nil || item.kind == filter) &&
-            (q.isEmpty || item.fileName.lowercased().contains(q) || g.title.lowercased().contains(q))
-        }
-    }
-    private var visibleGroups: [MediaGroup] { allGroups.filter { !filteredItems($0).isEmpty } }
-
-    private func toggle(_ item: MediaItem) { if selected.contains(item.id) { selected.remove(item.id) } else { selected.insert(item.id) } }
-    private func delete(_ item: MediaItem) {
-        for i in groups.indices { groups[i].items.removeAll { $0.id == item.id } }
-        store.remove(item.id); lightbox = nil
-    }
-    private func deleteSelected() {
-        for i in groups.indices { groups[i].items.removeAll { selected.contains($0.id) } }
-        selected.forEach { store.remove($0) }
-        selected.removeAll(); withAnimation { selecting = false }
-    }
 }
 
-// MARK: - Models + sample data
+// MARK: - Shared media kind (used by the capture layer: CapturedMedia / CaptureControl / RecordView / Memories).
 enum MediaKind: CaseIterable {
     case image, video, audio
     var plural: String { switch self { case .image: return "Images"; case .video: return "Video"; case .audio: return "Audio" } }
@@ -257,47 +319,53 @@ enum MediaKind: CaseIterable {
     var tone: Color { switch self { case .image: return WV.teal; case .video: return Color(hex: 0x6b5b95); case .audio: return Color(hex: 0xb08828) } }
 }
 
-struct MediaItem: Identifiable {
-    let id: String
-    let fileName: String
-    let kind: MediaKind
-    let memoryTitle: String?
-    var image: UIImage? = nil
-}
+// MARK: - Presigned thumbnail with a single refresh-on-error retry.
+// AsyncImage can't send Bearer, so a relative /file url fails first → we fetch a fresh presigned url once and
+// retry (didRefresh guards against a loop). Absolute presigned urls load on the first try.
+private struct MediaThumb: View {
+    let item: MediaItemDTO
+    @ObservedObject var vm: MediaViewModel
+    let auth: AuthManager
+    var fit: Bool = false          // lightbox uses scaledToFit; grid uses scaledToFill
+    @State private var url: URL?
+    @State private var didRefresh = false
 
-struct MediaGroup: Identifiable {
-    let id = UUID()
-    let title: String
-    let date: String?
-    let age: Int?
-    var items: [MediaItem]
-
-    var subtitle: String? {
-        switch (date, age) {
-        case let (d?, a?): return "\(d) · age \(a)"
-        case let (d?, nil): return d
-        case let (nil, a?): return "age \(a)"
-        default: return nil
+    var body: some View {
+        Group {
+            if let url {
+                AsyncImage(url: url, transaction: Transaction(animation: .easeOut(duration: 0.2))) { phase in
+                    switch phase {
+                    case .success(let img):
+                        if fit { img.resizable().scaledToFit() } else { img.resizable().scaledToFill() }
+                    case .empty:
+                        shimmer(loading: true)
+                    case .failure:
+                        shimmer(loading: false).task { await refreshOnce() }
+                    @unknown default:
+                        shimmer(loading: false)
+                    }
+                }
+            } else {
+                shimmer(loading: false)
+            }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
+        .onAppear { if url == nil { url = vm.resolvedURL(item.url) } }
     }
 
-    static let samples: [MediaGroup] = [
-        .init(title: "The long drive home", date: "June 2026", age: 53, items: [
-            .init(id: "m1", fileName: "drive_01.jpg", kind: .image, memoryTitle: "The long drive home"),
-            .init(id: "m2", fileName: "drive_02.jpg", kind: .image, memoryTitle: "The long drive home"),
-            .init(id: "m3", fileName: "road_clip.mov", kind: .video, memoryTitle: "The long drive home"),
-        ]),
-        .init(title: "A quiet morning", date: "May 2026", age: 53, items: [
-            .init(id: "m4", fileName: "morning.jpg", kind: .image, memoryTitle: "A quiet morning"),
-            .init(id: "m5", fileName: "voice_note.m4a", kind: .audio, memoryTitle: "A quiet morning"),
-        ]),
-        .init(title: "The old back porch", date: "April 2026", age: 52, items: [
-            .init(id: "m6", fileName: "porch_01.jpg", kind: .image, memoryTitle: "The old back porch"),
-            .init(id: "m7", fileName: "porch_02.jpg", kind: .image, memoryTitle: "The old back porch"),
-            .init(id: "m8", fileName: "porch_swing.mov", kind: .video, memoryTitle: "The old back porch"),
-        ]),
-        .init(title: "Other Media", date: nil, age: nil, items: [
-            .init(id: "m9", fileName: "untitled_recording.m4a", kind: .audio, memoryTitle: nil),
-        ]),
-    ]
+    private func refreshOnce() async {
+        guard !didRefresh else { return }
+        didRefresh = true
+        if let fresh = await vm.refreshURL(for: item.id, auth: auth), let u = vm.resolvedURL(fresh) { url = u }
+    }
+
+    private func shimmer(loading: Bool) -> some View {
+        ZStack {
+            WV.teal.opacity(0.06)
+            if loading { ProgressView().tint(WV.teal) }
+            else { Image(systemName: "photo").font(.system(size: 22)).foregroundStyle(WT.ink.opacity(0.25)) }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
 }

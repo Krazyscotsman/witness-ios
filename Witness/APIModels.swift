@@ -618,3 +618,29 @@ extension MemoryDTO {
                   importanceScore: nil, people: nil, location: nil, createdAt: nil, updatedAt: nil)
     }
 }
+
+// MARK: - Media gallery (GET /api/v1/media/gallery) — READ side. Decoded with .convertFromSnakeCase. `metadata`
+// is an untyped/loose dict, intentionally NOT modeled. `url` is either an ABSOLUTE presigned URL or a RELATIVE
+// /api/v1/media/{id}/file path (the VM resolves + presign-refreshes). `nonisolated`: decoded off-main.
+
+nonisolated struct MediaGalleryResponse: Decodable {
+    let media: [MediaItemDTO]?
+    let total: Int?
+    let limit: Int?
+    let offset: Int?
+}
+nonisolated struct MediaItemDTO: Decodable, Identifiable {
+    let id: String
+    let memoryId: String?
+    let fileName: String?
+    let fileType: String?     // image | video | audio | document
+    let fileSize: Int?
+    let mimeType: String?
+    let url: String
+    let createdAt: String?
+    let memoryTitle: String?
+    let memoryDate: String?
+    let narratorAge: Int?
+    // `metadata` omitted on purpose (loose/untyped).
+}
+nonisolated struct MediaURLResponse: Decodable { let url: String? }   // GET /api/v1/media/{id}/url (presign refresh)

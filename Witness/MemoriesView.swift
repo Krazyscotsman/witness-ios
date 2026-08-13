@@ -30,7 +30,7 @@ struct MemoriesView: View {
         }
         .task { await vm.load(auth: auth) }        // fetch-once (VM guards)
         .fullScreenCover(isPresented: $showRecord) { RecordView() }
-        .fullScreenCover(isPresented: $showGallery) { MediaView() }
+        .fullScreenCover(isPresented: $showGallery) { MediaView(auth: auth) }
     }
 
     private var list: some View {
