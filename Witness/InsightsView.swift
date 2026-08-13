@@ -29,7 +29,7 @@ struct InsightsView: View {
             .navigationDestination(for: InsightItem.self) { item in
                 switch item.id {
                 case "anchors":  AnchorRegistryView(auth: auth)
-                case "timeline": TimelineView()
+                case "timeline": TimelineView(auth: auth)
                 case "memoir":   MemoirView()
                 case "learn":    LearnView()
                 case "explain":  ExplainView(auth: auth)
@@ -72,7 +72,7 @@ struct InsightItem: Identifiable, Hashable {
     static let others: [InsightItem] = [
         .init(id: "timeline", icon: "clock", title: "Timeline",
               blurb: "Your life laid out in time.",
-              endpoint: "GET /timeline/relationships", note: nil),
+              endpoint: "GET /timeline/visual", note: nil),
         .init(id: "memoir", icon: "text.book.closed", title: "Memoir",
               blurb: "Your story, written as a flowing narrative.",
               endpoint: nil, note: nil),

@@ -574,3 +574,47 @@ nonisolated struct ExBeliefEvolutionDTO: Decodable {
     let changeReason: String?
     let emotionalDriver: String?
 }
+
+// MARK: - Timeline (GET /timeline/visual — BARE path, no /api/v1). Year-grouped, chronological, no params
+// (all filtering client-side). Decoded with .convertFromSnakeCase. Events are a UNION branched on `type`
+// (milestone/memory/anchor); the four enrichment fields (people/location/importanceScore/significance) are
+// MEMORY-ONLY — absent on birth & anchor events. `nonisolated`: decoded off-main in APIClient.
+
+nonisolated struct TimelineResponse: Decodable {
+    let birthdate: String?
+    let totalMemories: Int?
+    let totalYears: Int?
+    let years: [TimelineYear]?
+}
+nonisolated struct TimelineYear: Decodable {
+    let year: Int?
+    let age: Int?
+    let events: [TimelineEventDTO]?
+}
+nonisolated struct TimelineEventDTO: Decodable {
+    let id: String?
+    let type: String?          // "milestone" | "memory" | "anchor"
+    let category: String?
+    let title: String?
+    let subtitle: String?
+    let date: String?
+    let year: Int?
+    let age: Int?
+    let memoryId: String?
+    let snippet: String?
+    // memory-only enrichment (null on birth & anchor events):
+    let people: [String]?
+    let location: String?
+    let importanceScore: Double?
+    let significance: String?  // "critical" | null (binary — no gradient)
+}
+
+extension MemoryDTO {
+    /// Build a light MemoryDTO from a timeline memory event so a tap can open the real memory detail —
+    /// MemoryDetailView fetches the rich /detail by id; title + date give an instant header.
+    init(id: String, title: String?, exactDate: String?) {
+        self.init(id: id, title: title, narrative: nil, narrativeSnippet: nil, exactDate: exactDate,
+                  timeGranularity: nil, exactDateEstimated: nil, narratorAge: nil, qualityScore: nil,
+                  importanceScore: nil, people: nil, location: nil, createdAt: nil, updatedAt: nil)
+    }
+}
