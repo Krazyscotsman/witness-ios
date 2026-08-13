@@ -378,3 +378,20 @@ nonisolated struct EducationWriteRequest: Encodable {
         case achievements, challenges, notes
     }
 }
+
+/// POST /timeline/pets (create — mints a pet entity) AND PUT /timeline/pets/{id} (edit) body — EXACTLY the 9
+/// editable narrator_pets columns, nothing else (unknown column → 500). Pre-sanitized by the view (pet_type →
+/// stored lowercase via snakeKey; ISO dates; significance + other text trimmed VERBATIM — significance is FREE
+/// TEXT, never an enum). No date_precision (server-side for pets).
+nonisolated struct PetWriteRequest: Encodable {
+    let petName: String
+    let petType, breed: String
+    let startDate, endDate: String
+    let howAcquired, personality, significance, notes: String
+
+    enum CodingKeys: String, CodingKey {
+        case petName = "pet_name", petType = "pet_type", breed
+        case startDate = "start_date", endDate = "end_date"
+        case howAcquired = "how_acquired", personality, significance, notes
+    }
+}

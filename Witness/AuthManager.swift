@@ -121,6 +121,14 @@ final class AuthManager: ObservableObject {
         _ = try await api.postIgnoringResponseBody("/timeline/education", body: body, timeout: 20)
     }
 
+    /// Pets write (Group A). PUT edits; POST creates and mints a pet entity. Bare paths, any-2xx.
+    func updatePet(id: String, _ body: PetWriteRequest) async throws {
+        _ = try await api.putIgnoringResponseBody("/timeline/pets/\(id)", body: body, timeout: 20)
+    }
+    func createPet(_ body: PetWriteRequest) async throws {
+        _ = try await api.postIgnoringResponseBody("/timeline/pets", body: body, timeout: 20)
+    }
+
     /// Hydrates the app's stored companion identity from the backend (source of truth at launch). Only
     /// overwrites when the backend actually provides a value.
     private func applyProfile(_ p: ProfileDTO) {

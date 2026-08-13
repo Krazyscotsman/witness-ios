@@ -66,7 +66,7 @@ struct AnchorRegistryView: View {
         case "locations":  LocationListView(vm: vm, auth: auth)
         case "jobs":       JobListView(vm: vm, auth: auth)
         case "education":  EducationListView(vm: vm, auth: auth)
-        case "pets":       AnchorRecordListView(title: c.label, category: c, rows: vm.pets)
+        case "pets":       PetListView(vm: vm, auth: auth)
         case "hobbies":    AnchorRecordListView(title: c.label, category: c, rows: vm.hobbies)
         case "service":    AnchorRecordListView(title: c.label, category: c, rows: vm.service)
         default: EmptyView()
