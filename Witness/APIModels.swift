@@ -431,3 +431,146 @@ nonisolated struct WitnessEndResponse: Decodable {
         case status, sessionId = "session_id", turns, closingMessage = "closing_message", summary
     }
 }
+
+// MARK: - Explain Me (GET /api/v1/explain-me/…) — read-only synthesis. Decoded with .convertFromSnakeCase,
+// so properties are camelCase (no CodingKeys). Descriptive text is optional; arrays are [String]? (safeArr at
+// render). Patterns/Contradictions decode the UNION of fields and branch on type/source at render.
+
+nonisolated struct ExplainOverview: Decodable {
+    let narratorId: String?
+    let summary: Summary?
+    let dataAvailable: DataAvailable?
+
+    nonisolated struct Summary: Decodable {
+        let headline: String?
+        let coreForces: [ExForceDTO]?
+        let topPatterns: [ExPatternDTO]?
+        let topBreakingPoints: [ExBreakingDTO]?
+        let topContradictions: [ExContradictionDTO]?
+    }
+    nonisolated struct DataAvailable: Decodable {
+        let forcesCount: Int?
+        let breakingPointsCount: Int?
+        let contradictionsCount: Int?
+        let patternsCount: Int?
+        let hasEnoughData: Bool?
+    }
+}
+
+nonisolated struct ExForceDTO: Decodable {
+    let forceId: String?
+    let title: String?
+    let originEventTitle: String?
+    let originDate: String?
+    let activeToday: Bool?
+    let activeStrength: String?
+    let affectedDomains: [String]?
+    let downstreamEffects: [String]?
+    let beforeSelf: String?
+    let afterSelf: String?
+    let identityImpact: String?
+    let decisionWeight: String?
+}
+
+nonisolated struct ExPatternDTO: Decodable {   // heterogeneous by patternType
+    let patternId: String?
+    let patternType: String?
+    let title: String?
+    let description: String?
+    let occurrenceCount: Int?
+    let firstSeen: String?
+    let lastSeen: String?
+    let resolvedCount: Int?
+    let unresolvedCount: Int?
+    let stillActiveCount: Int?
+    let sourceCount: Int?
+}
+
+nonisolated struct ExBreakingDTO: Decodable {
+    let inflectionId: String?
+    let title: String?
+    let summary: String?
+    let dateLabel: String?
+    let memoryTitle: String?
+    let inflectionType: String?
+    let whyItMattered: String?
+    let beforeSelf: String?
+    let afterSelf: String?
+    let downstreamEffects: [String]?
+    let evidenceQuotes: [String]?
+    let activeToday: Bool?
+}
+
+nonisolated struct ExContradictionDTO: Decodable {   // heterogeneous by source
+    let contradictionId: String?
+    let source: String?
+    let title: String?
+    let sideA: String?
+    let sideB: String?
+    let whyBothAreTrue: String?
+    let stillActive: Bool?
+    let emotionA: String?
+    let emotionB: String?
+    let tensionLevel: String?
+    let conflictType: String?
+}
+
+// List-tab response wrappers (per §3: active-forces `forces[]`, etc.)
+nonisolated struct ExForcesResponse: Decodable { let forces: [ExForceDTO]? }
+nonisolated struct ExPatternsResponse: Decodable { let patterns: [ExPatternDTO]? }
+nonisolated struct ExBreakingResponse: Decodable { let breakingPoints: [ExBreakingDTO]? }
+nonisolated struct ExContradictionsResponse: Decodable { let contradictions: [ExContradictionDTO]? }
+
+// Identity — GET /identity
+nonisolated struct ExIdentity: Decodable {
+    let identityStates: [ExIdentityStateDTO]?
+    let transitions: [ExTransitionDTO]?
+    let activeStates: [ExIdentityStateDTO]?
+    let callout: String?
+}
+nonisolated struct ExIdentityStateDTO: Decodable {
+    let stateId: String?
+    let stateLabel: String?
+    let description: String?
+    let startDate: String?
+    let endDate: String?
+    let dominantTraits: [String]?
+    let dominantEmotions: [String]?
+    let dominantBeliefs: [String]?
+    let evidenceQuotes: [String]?
+    let stillActive: Bool?
+    let memoryCount: Int?
+}
+nonisolated struct ExTransitionDTO: Decodable {
+    let transitionId: String?
+    let fromState: String?
+    let toState: String?
+    let transitionType: String?
+    let summary: String?
+    let emotionalCost: String?
+    let permanence: String?
+}
+
+// Beliefs — GET /beliefs
+nonisolated struct ExBeliefs: Decodable {
+    let activeBeliefs: [ExBeliefDTO]?
+    let changedBeliefs: [ExBeliefDTO]?
+    let evolutions: [ExBeliefEvolutionDTO]?
+    let reactivatedBeliefs: [ExBeliefEvolutionDTO]?
+    let callout: String?
+}
+nonisolated struct ExBeliefDTO: Decodable {
+    let beliefId: String?
+    let beliefStatement: String?
+    let beliefType: String?
+    let stillHeld: Bool?
+    let evidenceQuotes: [String]?
+}
+nonisolated struct ExBeliefEvolutionDTO: Decodable {
+    let evolutionId: String?
+    let fromBelief: String?
+    let toBelief: String?
+    let evolutionType: String?
+    let changeReason: String?
+    let emotionalDriver: String?
+}

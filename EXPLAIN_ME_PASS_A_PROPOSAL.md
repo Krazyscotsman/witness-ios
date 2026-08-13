@@ -1,7 +1,160 @@
+# Witness — Explain Me → real backend, PASS A (Overview + VM + helpers) — Proposal
+
+Status: **PROPOSED — nothing applied, no build, no git.** Pass A of two (spec §8). Read-only.
+Field names are authoritative from `Witness_Explain_Me_Spec.md` §3.
+
+## Read-first (ExplainView + ExplainSample)
+- Nested `ExTab` enum + chip tabBar + ScrollView switch. Constructed `ExplainView()` in InsightsView (has auth).
+- Overview: headline hero + 4 preview sections via forceCard/patternCard/breakingCard/contradictionCard(.prefix).
+- 6 detail tabs render lists via those card renderers + stateCard/transitionCard/beliefCard/evolutionCard.
+- Shared blocks: tabHeader/sectionLabel/sublabel/meta/chipRow/whyBlock/strengthBadge/cardShell/truthBlock/beforeAfter.
+- All data from hardcoded ExplainSample (+ Ex* structs, ExConfidence).
+
+## Decisions (baked in; change any)
+1. Decode via `.convertFromSnakeCase` (reuse the APIClient `decoder:` param) → clean camelCase DTOs, no CodingKeys.
+2. Drop `confidence` from DTOs + remove confidenceBadge (spec: don't build UI on confidence).
+3. All descriptive fields optional; arrays `[String]?` → defensive `safeArr` at render; prettify via AnchorText.titleCase.
+4. Overview timeout 30s (slow Gemini). 401→refresh→retry.
+5. Pass A: Overview rendered from real data; the other 6 tabs show a neutral "coming together" placeholder
+   (Pass B wires their fetch + rendering). Drop the "Read"/tts TODO button (out of scope).
+
+---
+
+## APIModels.swift — Overview + 4 preview element DTOs (append)
+```swift
+// MARK: - Explain Me (GET /api/v1/explain-me/…) — read-only synthesis. Decoded with .convertFromSnakeCase,
+// so properties are camelCase (no CodingKeys). Descriptive text is optional; arrays are [String]? (safeArr at
+// render). Patterns/Contradictions decode the UNION of fields and branch on type/source at render.
+
+nonisolated struct ExplainOverview: Decodable {
+    let narratorId: String?
+    let summary: Summary?
+    let dataAvailable: DataAvailable?
+
+    nonisolated struct Summary: Decodable {
+        let headline: String?
+        let coreForces: [ExForceDTO]?
+        let topPatterns: [ExPatternDTO]?
+        let topBreakingPoints: [ExBreakingDTO]?
+        let topContradictions: [ExContradictionDTO]?
+    }
+    nonisolated struct DataAvailable: Decodable {
+        let forcesCount: Int?
+        let breakingPointsCount: Int?
+        let contradictionsCount: Int?
+        let patternsCount: Int?
+        let hasEnoughData: Bool?
+    }
+}
+
+nonisolated struct ExForceDTO: Decodable {
+    let forceId: String?
+    let title: String?
+    let originEventTitle: String?
+    let originDate: String?
+    let activeToday: Bool?
+    let activeStrength: String?          // high/medium/low
+    let affectedDomains: [String]?
+    let downstreamEffects: [String]?
+    let beforeSelf: String?
+    let afterSelf: String?
+    let identityImpact: String?
+    let decisionWeight: String?          // life_altering/high/moderate/low
+}
+
+nonisolated struct ExPatternDTO: Decodable {   // heterogeneous by patternType
+    let patternId: String?
+    let patternType: String?
+    let title: String?
+    let description: String?
+    let occurrenceCount: Int?
+    let firstSeen: String?
+    let lastSeen: String?
+    let resolvedCount: Int?
+    let unresolvedCount: Int?
+    let stillActiveCount: Int?
+    let sourceCount: Int?
+}
+
+nonisolated struct ExBreakingDTO: Decodable {
+    let inflectionId: String?
+    let title: String?
+    let summary: String?
+    let dateLabel: String?
+    let memoryTitle: String?
+    let inflectionType: String?
+    let whyItMattered: String?
+    let beforeSelf: String?
+    let afterSelf: String?
+    let downstreamEffects: [String]?
+    let evidenceQuotes: [String]?
+    let activeToday: Bool?
+}
+
+nonisolated struct ExContradictionDTO: Decodable {   // heterogeneous by source
+    let contradictionId: String?
+    let source: String?
+    let title: String?
+    let sideA: String?
+    let sideB: String?
+    let whyBothAreTrue: String?
+    let stillActive: Bool?
+    let emotionA: String?
+    let emotionB: String?
+    let tensionLevel: String?
+    let conflictType: String?
+}
+```
+
+## New file: ExplainViewModel.swift
+```swift
+import SwiftUI
+import Combine
+
+@MainActor
+final class ExplainViewModel: ObservableObject {
+    enum LoadState: Equatable { case idle, loading, loaded, failed(String) }
+
+    // Overview (Pass A). Pass B adds: forces/patterns/breaking/contradictions/identity/beliefs states + caches.
+    @Published private(set) var overviewState: LoadState = .idle
+    @Published private(set) var overview: ExplainOverview?
+
+    private static let snake: JSONDecoder = {
+        let d = JSONDecoder(); d.keyDecodingStrategy = .convertFromSnakeCase; return d
+    }()
+    private enum SessionError: Error { case sessionEnded }
+
+    func loadOverview(auth: AuthManager) async {
+        if overviewState == .loading || overviewState == .loaded { return }
+        overviewState = .loading
+        do {
+            overview = try await withAuth(auth) {
+                try await APIClient.shared.get("/api/v1/explain-me/overview", timeout: 30, decoder: Self.snake, as: ExplainOverview.self)
+            }
+            overviewState = .loaded
+        } catch SessionError.sessionEnded {
+            overviewState = .failed("Your session has ended. Please sign in again.")
+        } catch {
+            overviewState = .failed("We couldn’t load this yet. Check your connection and try again.")
+        }
+    }
+    func retryOverview(auth: AuthManager) async { overviewState = .idle; await loadOverview(auth: auth) }
+
+    // 401 → refresh → retry-once
+    private func withAuth<T>(_ auth: AuthManager, _ op: () async throws -> T) async throws -> T {
+        do { return try await op() }
+        catch APIError.unauthorized(_, let code) {
+            if await auth.handleUnauthorized(code: code) { return try await op() }
+            throw SessionError.sessionEnded
+        }
+    }
+}
+```
+
+## ExplainView.swift — FULL rewrite (Pass A). Overview real; 6 tabs placeholder; sample data removed.
+```swift
 import SwiftUI
 
-// MARK: - Explain Me — seven-tab synthesis of a life, wired to /api/v1/explain-me/… (read-only, lazy per tab).
-// Pass A: Overview is live; the six detail tabs show a placeholder (wired in Pass B).
 struct ExplainView: View {
     @ObservedObject var auth: AuthManager
     @Environment(\.dismiss) private var dismiss
@@ -29,12 +182,7 @@ struct ExplainView: View {
                     VStack(alignment: .leading, spacing: 18) {
                         switch tab {
                         case .overview:       overviewTab
-                        case .forces:         forcesTab
-                        case .patterns:       patternsTab
-                        case .breaking:       breakingTab
-                        case .contradictions: contradictionsTab
-                        case .identity:       identityTab
-                        case .beliefs:        beliefsTab
+                        default:              placeholderTab(tab.label)   // Pass B fills the six
                         }
                     }
                     .padding(.horizontal, 24).padding(.top, 16).padding(.bottom, 110)
@@ -44,7 +192,7 @@ struct ExplainView: View {
             navBar
         }
         .navigationBarBackButtonHidden(true).toolbar(.hidden, for: .navigationBar)
-        .task(id: tab) { await vm.load(tab, auth: auth) }   // lazy per-tab; cancels + reloads on switch
+        .task { await vm.loadOverview(auth: auth) }
     }
 
     private var navBar: some View {
@@ -94,10 +242,10 @@ struct ExplainView: View {
         let sm = ov?.summary
         let enough = (da?.hasEnoughData ?? true)
         let headline = (sm?.headline ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let anyPreview = !(sm?.coreForces ?? []).isEmpty || !(sm?.topPatterns ?? []).isEmpty
-            || !(sm?.topBreakingPoints ?? []).isEmpty || !(sm?.topContradictions ?? []).isEmpty
+        let anyPreview = !safeCards(sm?.coreForces).isEmpty || !safeCards(sm?.topPatterns).isEmpty
+            || !safeCards(sm?.topBreakingPoints).isEmpty || !safeCards(sm?.topContradictions).isEmpty
 
-        if !enough || (headline.isEmpty && !anyPreview && da == nil) {
+        if !enough || (headline.isEmpty && !anyPreview && (da == nil)) {
             notEnoughBlock
         } else {
             VStack(alignment: .leading, spacing: 22) {
@@ -107,7 +255,7 @@ struct ExplainView: View {
                         Text(headline).font(.serif(25)).foregroundStyle(WT.ink).lineSpacing(3).fixedSize(horizontal: false, vertical: true)
                     }
                 }
-                statGrid(da)   // TRUE totals from data_available.*_count (independent of the top-5 previews)
+                statGrid(da)   // TRUE totals from data_available.*_count
                 if let f = sm?.coreForces, !f.isEmpty {
                     overviewSection("ACTIVE FORCES") { ForEach(Array(f.enumerated()), id: \.offset) { _, x in forceCard(x) } }
                 }
@@ -123,6 +271,7 @@ struct ExplainView: View {
             }
         }
     }
+    private func safeCards<T>(_ a: [T]?) -> [T] { a ?? [] }
     private func overviewSection<C: View>(_ title: String, @ViewBuilder _ content: () -> C) -> some View {
         VStack(alignment: .leading, spacing: 10) { sectionLabel(title); content() }
     }
@@ -167,9 +316,7 @@ struct ExplainView: View {
             }
             if let bs = f.beforeSelf, let asf = f.afterSelf, !bs.isEmpty || !asf.isEmpty {
                 HStack(alignment: .top, spacing: 10) {
-                    beforeAfter("Who I was", bs)
-                    Image(systemName: "arrow.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(WT.ink.opacity(0.3)).padding(.top, 22)
-                    beforeAfter("Who I became", asf)
+                    beforeAfter("Who I was", bs); Image(systemName: "arrow.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(WT.ink.opacity(0.3)).padding(.top, 22); beforeAfter("Who I became", asf)
                 }
             }
             if let i = f.identityImpact, !i.isEmpty { whyBlock("Why this matters", i) }
@@ -196,9 +343,7 @@ struct ExplainView: View {
             if let w = b.whyItMattered, !w.isEmpty { whyBlock("Why it mattered", w) }
             if let bs = b.beforeSelf, let asf = b.afterSelf, !bs.isEmpty || !asf.isEmpty {
                 HStack(alignment: .top, spacing: 10) {
-                    beforeAfter("Who I was before", bs)
-                    Image(systemName: "arrow.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(WT.ink.opacity(0.3)).padding(.top, 22)
-                    beforeAfter("Who I became", asf)
+                    beforeAfter("Who I was before", bs); Image(systemName: "arrow.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(WT.ink.opacity(0.3)).padding(.top, 22); beforeAfter("Who I became", asf)
                 }
             }
             let quotes = safeArr(b.evidenceQuotes)
@@ -219,9 +364,6 @@ struct ExplainView: View {
             if let a = c.sideA, !a.isEmpty { truthBlock("One truth", a, tone: WV.teal) }
             HStack(spacing: 8) { Rectangle().fill(WT.ink.opacity(0.1)).frame(height: 1); Text("and yet").font(.serif(13)).italic().foregroundStyle(WT.ink.opacity(0.45)); Rectangle().fill(WT.ink.opacity(0.1)).frame(height: 1) }
             if let b = c.sideB, !b.isEmpty { truthBlock("Another truth", b, tone: WV.gold) }
-            if let ea = c.emotionA, let eb = c.emotionB, !ea.isEmpty, !eb.isEmpty {
-                meta("Tension", "\(pretty(ea)) vs \(pretty(eb))")   // internal_conflict source only
-            }
             if let w = c.whyBothAreTrue, !w.isEmpty { whyBlock("Why both are true", w) }
         }
     }
@@ -246,140 +388,17 @@ struct ExplainView: View {
                 .font(.system(size: 15)).foregroundStyle(WT.ink.opacity(0.55)).multilineTextAlignment(.center).lineSpacing(3).fixedSize(horizontal: false, vertical: true).padding(.horizontal, 30)
         }.frame(maxWidth: .infinity).padding(.top, 40)
     }
-    // MARK: Detail tabs (lazy; reuse the DTO card renderers)
-    @ViewBuilder private var forcesTab: some View {
-        detailScaffold(vm.forcesState, retry: .forces, header: "Active Forces",
-                       subtitle: "The currents still shaping how you choose, today.", isEmpty: vm.forces.isEmpty,
-                       emptyText: "No active forces surfaced yet.") {
-            ForEach(Array(vm.forces.enumerated()), id: \.offset) { _, x in forceCard(x) }
-        }
-    }
-    @ViewBuilder private var patternsTab: some View {
-        detailScaffold(vm.patternsState, retry: .patterns, header: "Patterns of a Life",
-                       subtitle: "What repeats — across years, people, and places.", isEmpty: vm.patterns.isEmpty,
-                       emptyText: "No patterns surfaced yet.") {
-            ForEach(Array(vm.patterns.enumerated()), id: \.offset) { _, x in patternCard(x) }
-        }
-    }
-    @ViewBuilder private var breakingTab: some View {
-        detailScaffold(vm.breakingState, retry: .breaking, header: "Breaking Points",
-                       subtitle: "The moments the story changed direction.", isEmpty: vm.breaking.isEmpty,
-                       emptyText: "No breaking points surfaced yet.") {
-            ForEach(Array(vm.breaking.enumerated()), id: \.offset) { _, x in breakingCard(x) }
-        }
-    }
-    @ViewBuilder private var contradictionsTab: some View {
-        detailScaffold(vm.contradictionsState, retry: .contradictions, header: "Contradictions Preserved",
-                       subtitle: "Two truths that are both real — held without forcing resolution.", isEmpty: vm.contradictions.isEmpty,
-                       emptyText: "No contradictions surfaced yet.") {
-            ForEach(Array(vm.contradictions.enumerated()), id: \.offset) { _, x in contradictionCard(x) }
-        }
-    }
-    @ViewBuilder private var identityTab: some View {
-        detailScaffold(vm.identityState, retry: .identity, header: "Identity",
-                       subtitle: "Who you've been, across time.",
-                       isEmpty: (vm.identity?.identityStates ?? []).isEmpty && (vm.identity?.transitions ?? []).isEmpty,
-                       emptyText: "No identity states surfaced yet.") {
-            if let c = vm.identity?.callout, !c.isEmpty { calloutRow(c) }
-            let states = vm.identity?.identityStates ?? []
-            if !states.isEmpty {
-                sectionLabel("ACTIVE INTERPRETATIONS")
-                ForEach(Array(states.enumerated()), id: \.offset) { _, s in stateCard(s) }
-            }
-            let trans = vm.identity?.transitions ?? []
-            if !trans.isEmpty {
-                sectionLabel("TRANSITIONS")
-                ForEach(Array(trans.enumerated()), id: \.offset) { _, t in transitionCard(t) }
-            }
-        }
-    }
-    @ViewBuilder private var beliefsTab: some View {
-        detailScaffold(vm.beliefsState, retry: .beliefs, header: "Beliefs",
-                       subtitle: "What you hold to be true — and how it has changed.",
-                       isEmpty: (vm.beliefs?.activeBeliefs ?? []).isEmpty && (vm.beliefs?.changedBeliefs ?? []).isEmpty && (vm.beliefs?.evolutions ?? []).isEmpty,
-                       emptyText: "No beliefs surfaced yet.") {
-            if let c = vm.beliefs?.callout, !c.isEmpty { calloutRow(c) }
-            let held = vm.beliefs?.activeBeliefs ?? []
-            if !held.isEmpty { sectionLabel("STILL HELD"); ForEach(Array(held.enumerated()), id: \.offset) { _, b in beliefCard(b) } }
-            let changed = vm.beliefs?.changedBeliefs ?? []
-            if !changed.isEmpty { sectionLabel("CHANGED"); ForEach(Array(changed.enumerated()), id: \.offset) { _, b in beliefCard(b) } }
-            let evo = vm.beliefs?.evolutions ?? []
-            if !evo.isEmpty { sectionLabel("HOW BELIEFS EVOLVED"); ForEach(Array(evo.enumerated()), id: \.offset) { _, e in evolutionCard(e) } }
-        }
+    private func placeholderTab(_ title: String) -> some View {
+        VStack(spacing: 12) { ProgressView().tint(WV.teal); Text("\(title) is coming together…").font(.system(size: 14)).foregroundStyle(WT.ink.opacity(0.5)) }
+            .frame(maxWidth: .infinity).padding(.top, 60)
     }
 
-    @ViewBuilder private func detailScaffold<C: View>(_ state: ExplainViewModel.LoadState, retry tab: ExTab,
-        header: String, subtitle: String, isEmpty: Bool, emptyText: String, @ViewBuilder _ content: () -> C) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            tabHeader(header, subtitle)
-            switch state {
-            case .idle, .loading: loadingBlock("Reading your whole story…")
-            case .failed(let m):  failedBlock(m) { Task { await vm.retry(tab, auth: auth) } }
-            case .loaded:         if isEmpty { emptyPanel(emptyText) } else { content() }
-            }
-        }
-    }
-    private func emptyPanel(_ text: String) -> some View {
-        VStack(spacing: 10) {
-            Image(systemName: "sparkles").font(.system(size: 26)).foregroundStyle(WT.ink.opacity(0.25))
-            Text(text).font(.system(size: 15)).foregroundStyle(WT.ink.opacity(0.5)).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
-        }.frame(maxWidth: .infinity).padding(.top, 30)
-    }
-    private func calloutRow(_ c: String) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "info.circle").font(.system(size: 15)).foregroundStyle(WV.teal).padding(.top, 1)
-            Text(c).font(.system(size: 14)).foregroundStyle(WT.ink.opacity(0.6)).lineSpacing(3).fixedSize(horizontal: false, vertical: true)
-        }.padding(14).background(WV.teal.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
-    }
-
-    // New DTO card renderers (identity + beliefs)
-    private func stateCard(_ s: ExIdentityStateDTO) -> some View {
-        cardShell {
-            HStack {
-                Text(orDash(s.stateLabel)).font(.serif(19)).foregroundStyle(WT.ink)
-                Spacer()
-                if s.stillActive == true { tag("Active") }
-            }
-            let range = [s.startDate, s.endDate].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " – ")
-            if !range.isEmpty { Text(range).font(.system(size: 12)).foregroundStyle(WT.ink.opacity(0.45)) }
-            if let d = s.description, !d.isEmpty { Text(d).font(.system(size: 14)).foregroundStyle(WT.ink.opacity(0.7)).lineSpacing(3).fixedSize(horizontal: false, vertical: true) }
-            let traits = safeArr(s.dominantTraits); if !traits.isEmpty { chipRow("Traits", traits.map(pretty), tone: WV.teal) }
-            let emos = safeArr(s.dominantEmotions); if !emos.isEmpty { chipRow("Emotions", emos.map(pretty), tone: WV.gold) }
-            let bels = safeArr(s.dominantBeliefs); if !bels.isEmpty { chipRow("Beliefs", bels.map(pretty), tone: Color(hex: 0x6b5b95)) }
-        }
-    }
-    private func transitionCard(_ t: ExTransitionDTO) -> some View {
-        cardShell {
-            HStack(spacing: 8) {
-                Text(orDash(t.fromState)).font(.serif(16)).foregroundStyle(WT.ink.opacity(0.7))
-                Image(systemName: "arrow.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(WV.gold)
-                Text(orDash(t.toState)).font(.serif(16)).foregroundStyle(WT.ink)
-                Spacer()
-            }
-            if let s = t.summary, !s.isEmpty { Text(s).font(.system(size: 14)).foregroundStyle(WT.ink.opacity(0.7)).fixedSize(horizontal: false, vertical: true) }
-            if let e = t.emotionalCost, !e.isEmpty { meta("Emotional cost", e) }
-        }
-    }
-    private func beliefCard(_ b: ExBeliefDTO) -> some View {
-        cardShell {
-            Text("“\(orDash(b.beliefStatement))”").font(.serif(17)).foregroundStyle(WT.ink).fixedSize(horizontal: false, vertical: true)
-            if let t = b.beliefType, !t.isEmpty { Text(pretty(t)).font(.system(size: 12)).foregroundStyle(WT.ink.opacity(0.45)) }
-        }
-    }
-    private func evolutionCard(_ e: ExBeliefEvolutionDTO) -> some View {
-        cardShell {
-            truthBlock("From", orDash(e.fromBelief), tone: WT.ink.opacity(0.4))
-            truthBlock("To", orDash(e.toBelief), tone: WV.teal)
-            if let r = e.changeReason, !r.isEmpty { whyBlock("What changed it", r) }
-        }
-    }
-
-    // MARK: Defensive helpers (mirror the web's safeArr / pretty)
+    // MARK: Defensive helpers (mirror web safeArr/pretty)
     private func safeArr(_ a: [String]?) -> [String] { a ?? [] }
     private func pretty(_ s: String?) -> String { AnchorText.titleCase(s) }
     private func orDash(_ s: String?) -> String { let t = (s ?? "").trimmingCharacters(in: .whitespaces); return t.isEmpty ? "—" : t }
 
-    // MARK: Shared building blocks
+    // MARK: Shared building blocks (carried over unchanged, minus confidenceBadge)
     private func tabHeader(_ title: String, _ subtitle: String) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title).font(.serif(26)).foregroundStyle(WT.ink)
@@ -426,3 +445,21 @@ struct ExplainView: View {
             .shadow(color: WT.ink.opacity(0.04), radius: 8, y: 4)
     }
 }
+```
+(REMOVED: `ExConfidence`, `confidenceBadge`, `ExplainSample`, and the 8 sample structs ExForce/ExBreaking/
+ExPattern/ExContradiction/ExIdentityState/ExTransition/ExBelief/ExEvolution. `chipRow` now uses the existing
+`FlowLayout` for safe wrapping. `tabHeader` kept for Pass B's detail tabs.)
+
+## InsightsView.swift — pass auth
+```diff
+-                case "explain":  ExplainView()
++                case "explain":  ExplainView(auth: auth)
+```
+
+---
+
+## After Pass A approval + apply
+Build 0/0 + diagnostics. Then I propose **Pass B** (the six detail tabs: active-forces/patterns/breaking-points/
+contradictions/identity/beliefs — their DTOs + list rendering + lazy per-tab load, reusing this VM + helpers).
+Honest note: live overview round-trip (slow Gemini headline, real counts vs previews, null-heavy fields) is a
+device/backend check. No git.
