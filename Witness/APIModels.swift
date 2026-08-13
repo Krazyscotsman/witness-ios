@@ -358,3 +358,23 @@ nonisolated struct JobWriteRequest: Encodable {
         case skillsGained = "skills_gained", certificationsEarned = "certifications_earned", notes
     }
 }
+
+/// POST /timeline/education (create — mints an entity) AND PUT /timeline/education/{id} (edit) body — EXACTLY
+/// the 13 editable narrator_education columns, nothing else (unknown column → 500). degree_achieved is a JSON
+/// bool; the rest are pre-sanitized strings (selects → stored lowercase via snakeKey; ISO dates). NOTE: NO
+/// date_precision — it's server-side for education, never sent from the editor.
+nonisolated struct EducationWriteRequest: Encodable {
+    let institutionName: String
+    let institutionType, institutionLocation, attendanceMode, degreeType, fieldOfStudy: String
+    let degreeAchieved: Bool
+    let startDate, endDate, graduationDate: String
+    let achievements, challenges, notes: String
+
+    enum CodingKeys: String, CodingKey {
+        case institutionName = "institution_name", institutionType = "institution_type"
+        case institutionLocation = "institution_location", attendanceMode = "attendance_mode"
+        case degreeType = "degree_type", fieldOfStudy = "field_of_study", degreeAchieved = "degree_achieved"
+        case startDate = "start_date", endDate = "end_date", graduationDate = "graduation_date"
+        case achievements, challenges, notes
+    }
+}

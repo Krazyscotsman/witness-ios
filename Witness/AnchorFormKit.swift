@@ -81,6 +81,14 @@ func anchorDateField(_ label: String, _ value: Date?, onEdit: @escaping () -> Vo
     }
 }
 
+func anchorToggleField(_ label: String, _ binding: Binding<Bool>) -> some View {
+    Toggle(isOn: binding) { Text(label).font(.system(size: 15)).foregroundStyle(WT.ink) }
+        .tint(WV.teal)
+        .padding(.horizontal, 14).frame(minHeight: 50)
+        .background(Color.white, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(WT.ink.opacity(0.12), lineWidth: 1))
+}
+
 // Reusable date-picker sheet with a floor date (shared by both editors).
 struct AnchorDateSheet: View {
     let initial: Date
