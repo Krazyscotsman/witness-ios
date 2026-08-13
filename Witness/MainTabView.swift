@@ -36,7 +36,7 @@ struct MainTabView: View {
     var body: some View {
         Group {
             switch tab {
-            case .home:     HomeView()
+            case .home:     HomeView(auth: auth, memoriesVM: memoriesVM, tab: $tab)
             case .memories: MemoriesView(vm: memoriesVM, auth: auth, path: $memoriesPath)
             case .talk:     TalkView()
             case .insights: InsightsView(auth: auth, path: $insightsPath)
