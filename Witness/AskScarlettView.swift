@@ -45,6 +45,35 @@ final class WitnessSessionViewModel: ObservableObject {
         await start(memoryId: m, auth: auth)
     }
 
+    // MARK: Start — whole-life open mode (Talk tab). Posts body {} (no memory_id) and seeds a CLIENT greeting;
+    // the backend opening_message is intentionally discarded. memoryId stays nil → drives postStartCurrent().
+    func startWholeLife(greeting: String, auth: AuthManager) async {
+        if messages.isEmpty && !greeting.isEmpty { messages.append(ChatMessage(role: .companion, text: greeting)) }
+        self.memoryId = nil
+        phase = .starting; errorText = nil
+        do {
+            let r = try await withAuth(auth) { try await self.postStartWholeLife() }
+            guard let sid = r.sessionId, !sid.isEmpty else { throw SessionError.badResponse }
+            sessionId = sid; conversationId = r.conversationId
+            // r.openingMessage intentionally discarded — the client greeting is already shown.
+            phase = .idle
+        } catch SessionError.sessionEnded {
+            phase = .failed("Your session has ended. Please sign in again.")
+        } catch {
+            phase = .failed("We couldn’t start the conversation. Please check your connection and try again.")
+        }
+    }
+    func retryStartWholeLife(auth: AuthManager) async {
+        // keep the greeting already on screen; just retry the session start
+        await startWholeLife(greeting: "", auth: auth)
+    }
+
+    // MARK: Reset — for the Talk tab's "Start a new conversation" after end() (a tab can't be dismissed).
+    func reset() {
+        messages.removeAll(); summary = nil; errorText = nil; pendingRetry = nil
+        sessionId = nil; conversationId = nil; memoryId = nil; phase = .starting
+    }
+
     // MARK: Send a turn (debounced; one at a time)
     func send(_ text: String, auth: AuthManager) async {
         let content = String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(10000))
@@ -76,9 +105,8 @@ final class WitnessSessionViewModel: ObservableObject {
         do {
             return try await withAuth(auth) { try await self.postTurn(content) }
         } catch APIError.http(let status, _) where status == 404 {
-            guard let memoryId else { throw SessionError.badResponse }
             reconnecting = true; defer { reconnecting = false }
-            let s = try await withAuth(auth) { try await self.postStart(memoryId) }
+            let s = try await withAuth(auth) { try await self.postStartCurrent() }
             guard let sid = s.sessionId, !sid.isEmpty else { throw SessionError.badResponse }
             sessionId = sid; conversationId = s.conversationId
             // Do NOT append the fresh opening_message — we're mid-conversation.
@@ -105,9 +133,8 @@ final class WitnessSessionViewModel: ObservableObject {
         do {
             return try await withAuth(auth) { try await self.postEnd() }
         } catch APIError.http(let status, _) where status == 404 {
-            guard let memoryId else { throw SessionError.badResponse }
             reconnecting = true; defer { reconnecting = false }
-            let s = try await withAuth(auth) { try await self.postStart(memoryId) }
+            let s = try await withAuth(auth) { try await self.postStartCurrent() }
             guard let sid = s.sessionId, !sid.isEmpty else { throw SessionError.badResponse }
             sessionId = sid
             return try await withAuth(auth) { try await self.postEnd() }
@@ -127,6 +154,15 @@ final class WitnessSessionViewModel: ObservableObject {
     private func postStart(_ memoryId: String) async throws -> WitnessStartResponse {
         try await APIClient.shared.post("/api/v1/jarvis/witness/sessions",
             body: WitnessStartRequest(memoryId: memoryId, voiceMode: false), timeout: 60, as: WitnessStartResponse.self)
+    }
+    private func postStartWholeLife() async throws -> WitnessStartResponse {
+        try await APIClient.shared.post("/api/v1/jarvis/witness/sessions",
+            body: EmptyBody(), timeout: 60, as: WitnessStartResponse.self)   // {} → open mode
+    }
+    /// Restart in the CURRENT mode: memory-scoped when a memoryId is set, else whole-life (empty body).
+    private func postStartCurrent() async throws -> WitnessStartResponse {
+        if let memoryId { return try await postStart(memoryId) }
+        return try await postStartWholeLife()
     }
     private func postTurn(_ content: String) async throws -> WitnessTurnResponse {
         guard let sessionId else { throw SessionError.badResponse }
