@@ -36,6 +36,9 @@ final class WitnessSessionViewModel: ObservableObject {
         } catch SessionError.sessionEnded {
             phase = .failed("Your session has ended. Please sign in again.")
         } catch {
+            #if DEBUG
+            print("🩺[WitnessStart] caught: \(error)")
+            #endif
             phase = .failed("We couldn’t start the conversation. Please check your connection and try again.")
         }
     }
@@ -60,6 +63,9 @@ final class WitnessSessionViewModel: ObservableObject {
         } catch SessionError.sessionEnded {
             phase = .failed("Your session has ended. Please sign in again.")
         } catch {
+            #if DEBUG
+            print("🩺[WitnessStart] caught: \(error)")
+            #endif
             phase = .failed("We couldn’t start the conversation. Please check your connection and try again.")
         }
     }
@@ -122,7 +128,7 @@ final class WitnessSessionViewModel: ObservableObject {
             let r = try await endWithRestart(auth: auth)
             let closing = (r.closingMessage ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             if !closing.isEmpty { messages.append(ChatMessage(role: .companion, text: closing)) }
-            let s = (r.summary ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let s = (r.summaryText ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             summary = s.isEmpty ? nil : s
         } catch {
             // best-effort: finalize locally regardless (the user is done).

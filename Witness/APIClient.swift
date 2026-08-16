@@ -143,11 +143,24 @@ final class APIClient {
 
         let data: Data, response: URLResponse
         do { (data, response) = try await session.data(for: req) }
-        catch { throw APIError.network(error) }
+        catch {
+            #if DEBUG
+            if url.absoluteString.contains("/jarvis/witness/sessions") {
+                print("🩺[WitnessStart] TRANSPORT error: \(error)  urlCode=\((error as? URLError)?.code.rawValue ?? -1)")
+            }
+            #endif
+            throw APIError.network(error)
+        }
 
         guard let http = response as? HTTPURLResponse else {
             throw APIError.network(URLError(.badServerResponse))
         }
+        #if DEBUG
+        if url.absoluteString.contains("/jarvis/witness/sessions") {
+            let raw = String(data: data, encoding: .utf8)?.prefix(600) ?? ""
+            print("🩺[WitnessStart] \(method) \(url.absoluteString) → \(http.statusCode)  bytes=\(data.count)  body=\(raw)")
+        }
+        #endif
         if http.statusCode == 401 {
             // /auth/login bad-creds carry {detail}; guarded endpoints carry {code}; /auth/me and
             // /auth/refresh are code-less (nil code -> re-login, handled by AuthManager).

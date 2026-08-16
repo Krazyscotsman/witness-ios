@@ -407,29 +407,46 @@ nonisolated struct WitnessStartResponse: Decodable {
     let sessionId: String?
     let conversationId: String?
     let openingMessage: String?
-    let contextSummary: String?
+    // context_summary intentionally NOT decoded: the backend sends it as an OBJECT and iOS never uses it.
+    // (Declaring it as String? was the decode mismatch that broke every witness session start.)
     enum CodingKeys: String, CodingKey {
         case sessionId = "session_id", conversationId = "conversation_id"
-        case openingMessage = "opening_message", contextSummary = "context_summary"
+        case openingMessage = "opening_message"
     }
 }
 nonisolated struct WitnessTurnRequest: Encodable { let content: String }
 nonisolated struct WitnessTurnResponse: Decodable {
     let response: String?
-    let turnNumber: Int?
-    let responseType: String?
-    // discoveries / new_entities are ALWAYS null — intentionally NOT modeled (no per-turn "what changed" UI).
-    enum CodingKeys: String, CodingKey { case response, turnNumber = "turn_number", responseType = "response_type" }
+    // turn_number / response_type / discoveries / new_entities intentionally NOT decoded — iOS uses only
+    // `response`. Omitting them avoids any String-vs-object decode fragility on the turn path.
 }
 nonisolated struct WitnessEndResponse: Decodable {
     let status: String?
     let sessionId: String?
     let turns: Int?
     let closingMessage: String?
-    let summary: String?
+    let summary: JSONValue?     // backend sends an OBJECT — decode opaquely (never String) so end() never fails
+    var summaryText: String? { summary?.stringValue }   // shown only if the server ever sends a plain string
     enum CodingKeys: String, CodingKey {
         case status, sessionId = "session_id", turns, closingMessage = "closing_message", summary
     }
+}
+
+/// Opaque JSON value — for a field whose shape isn't fixed (string OR object/array). Decodes any JSON without
+/// ever throwing, so a shape change on an unused/opaque field can't break the whole response.
+nonisolated enum JSONValue: Decodable {
+    case string(String), number(Double), bool(Bool), object([String: JSONValue]), array([JSONValue]), null
+    init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        if c.decodeNil() { self = .null }
+        else if let b = try? c.decode(Bool.self) { self = .bool(b) }
+        else if let d = try? c.decode(Double.self) { self = .number(d) }
+        else if let s = try? c.decode(String.self) { self = .string(s) }
+        else if let o = try? c.decode([String: JSONValue].self) { self = .object(o) }
+        else if let a = try? c.decode([JSONValue].self) { self = .array(a) }
+        else { self = .null }
+    }
+    var stringValue: String? { if case .string(let s) = self { return s }; return nil }
 }
 
 // MARK: - Explain Me (GET /api/v1/explain-me/…) — read-only synthesis. Decoded with .convertFromSnakeCase,
