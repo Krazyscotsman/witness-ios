@@ -449,6 +449,48 @@ nonisolated enum JSONValue: Decodable {
     var stringValue: String? { if case .string(let s) = self { return s }; return nil }
 }
 
+// MARK: - Jarvis conversation history (read-only). Two DISTINCT list shapes (not forced into one):
+//  • memory-scoped (GET /jarvis/memories/{id}/conversations): has ended_at, no memory fields.
+//  • recent (GET /jarvis/conversations/recent, MIXED scopes): has memory fields, no ended_at.
+// Decoded with .convertFromSnakeCase. ⚠️ memory_id can be the literal string "None" — decoded as String?
+// (NEVER UUID?) and normalized; whole-life is discriminated by memory_title == nil, NOT memory_id.
+nonisolated struct MemoryConversationsResponse: Decodable { let conversations: [MemoryConvSummary]? }
+nonisolated struct MemoryConvSummary: Decodable, Identifiable {
+    let id: String
+    let startedAt: String?
+    let endedAt: String?
+    let turnCount: Int?
+    let summary: String?
+    let status: String?
+}
+nonisolated struct RecentConversationsResponse: Decodable { let conversations: [RecentConvSummary]? }
+nonisolated struct RecentConvSummary: Decodable, Identifiable {
+    let id: String
+    let memoryId: String?      // ⚠️ can be the literal "None"
+    let memoryTitle: String?
+    let status: String?
+    let startedAt: String?
+    let turnCount: Int?
+    let summary: String?
+
+    /// "None"/""/nil → nil (same backend quirk that made context_summary crash when typed as a scalar).
+    static func normNone(_ s: String?) -> String? {
+        guard let s, !s.isEmpty, s != "None" else { return nil }
+        return s
+    }
+    var memoryIdNorm: String? { Self.normNone(memoryId) }
+    var isWholeLife: Bool { Self.normNone(memoryTitle) == nil }   // discriminate by memory_title, NOT memory_id
+}
+nonisolated struct ConversationTurnsResponse: Decodable { let turns: [ConversationTurn]? }
+nonisolated struct ConversationTurn: Decodable {
+    let turnNumber: Int?
+    let role: String?          // "jarvis" | "user"
+    let content: String?
+    let phase: String?
+    let turnType: String?
+    let createdAt: String?
+}
+
 // MARK: - Explain Me (GET /api/v1/explain-me/…) — read-only synthesis. Decoded with .convertFromSnakeCase,
 // so properties are camelCase (no CodingKeys). Descriptive text is optional; arrays are [String]? (safeArr at
 // render). Patterns/Contradictions decode the UNION of fields and branch on type/source at render.
@@ -680,7 +722,7 @@ nonisolated struct GraphNode: Decodable {
     let isNarrator: Bool?
     let memoryCount: Int?
     let aliases: [String]?
-    let nameComplete: String?
+    let nameComplete: Bool?    // ⚠️ backend sends a BOOL (name_complete: true), NOT a string
     let anchorRelType: String?
     let birthDate: String?
     let deathDate: String?
@@ -689,16 +731,13 @@ nonisolated struct GraphNode: Decodable {
     let size: Double?          // precomputed; unused (app palette instead)
 }
 nonisolated struct GraphEdge: Decodable {
-    let id: String?
     let source: String
     let target: String
     let relationshipType: String?
     let strength: Double?
-    let memoryCount: Int?
-    let lineStyle: String?
-    let color: String?
-    let width: Double?         // precomputed; unused
-    let label: String?
+    // id / memory_count / line_style / color / width / label intentionally NOT decoded — unused by iOS (app
+    // palette drives styling). Edges were truncated from the DEBUG body, so decoding only the 4 used fields
+    // pre-empts the name_complete decode-mismatch class on the unverified part of the response.
 }
 nonisolated struct GraphStats: Decodable {
     let totalNodes: Int?

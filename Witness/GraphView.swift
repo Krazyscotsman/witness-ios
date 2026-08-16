@@ -32,7 +32,7 @@ struct GraphView: View {
             navBar
         }
         .navigationBarBackButtonHidden(true).toolbar(.hidden, for: .navigationBar)
-        .sheet(item: $selected) { nodeDetail($0) }
+        .sheet(item: $selected) { NodeDetailSheet(node: $0, auth: auth) }
         .onChange(of: enabled) { _, _ in layout.wake() }
         .task { await vm.load(auth: auth); applyIfLoaded() }
     }
@@ -183,40 +183,6 @@ struct GraphView: View {
         .padding(.vertical, 10).background(WV.parchment)
     }
 
-    // MARK: detail
-    private func nodeDetail(_ node: GNode) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Capsule().fill(WT.ink.opacity(0.15)).frame(width: 36, height: 5).frame(maxWidth: .infinity).padding(.top, 10)
-            HStack(spacing: 12) {
-                ZStack { Circle().fill(node.isNarrator ? WV.teal : RelGroup.color(for: node.primaryRel)).frame(width: 50, height: 50)
-                    if node.isAnchor { Circle().stroke(WV.gold, lineWidth: 2.5).frame(width: 56, height: 56) } }
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(node.label).font(.serif(24)).foregroundStyle(WT.ink)
-                    Text(humanize(node.primaryRel)).font(.system(size: 13)).foregroundStyle(WT.ink.opacity(0.55))
-                }
-                Spacer()
-                if node.isAnchor { Text("Anchor").font(.system(size: 11, weight: .semibold)).foregroundStyle(WV.gold).padding(.horizontal, 9).padding(.vertical, 4).background(WV.gold.opacity(0.12), in: Capsule()) }
-            }
-            .padding(.horizontal, 24)
-            VStack(spacing: 0) {
-                detailRow("Memories", "\(node.memoryCount)")
-                if let b = node.born { Divider(); detailRow("Born", b) }
-                if let d = node.died { Divider(); detailRow("Died", d) }
-                if !node.aliases.isEmpty { Divider(); detailRow("Also known as", node.aliases.joined(separator: ", ")) }
-            }
-            .padding(.horizontal, 16)
-            .background(WV.card, in: RoundedRectangle(cornerRadius: 16)).overlay(RoundedRectangle(cornerRadius: 16).stroke(WT.ink.opacity(0.08), lineWidth: 1))
-            .padding(.horizontal, 24)
-            Spacer()
-        }
-        .frame(maxWidth: .infinity)
-        .background(WV.parchment)
-        .presentationDetents([.height(320)])
-    }
-    private func detailRow(_ l: String, _ v: String) -> some View {
-        HStack { Text(l).font(.system(size: 14)).foregroundStyle(WT.ink.opacity(0.55)); Spacer(); Text(v).font(.system(size: 15, weight: .medium)).foregroundStyle(WT.ink) }.frame(height: 46)
-    }
-
     // MARK: helpers
     private var visibleEdges: [GEdge] {
         layout.edges.filter { e in
@@ -230,7 +196,6 @@ struct GraphView: View {
         if n.isNarrator { return true }
         return visibleEdges.contains { $0.source == n.id || $0.target == n.id }
     }
-    private func humanize(_ s: String) -> String { s.split(separator: "_").map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined(separator: " ") }
 }
 
 // MARK: - Modes

@@ -160,6 +160,10 @@ final class APIClient {
             let raw = String(data: data, encoding: .utf8)?.prefix(600) ?? ""
             print("🩺[WitnessStart] \(method) \(url.absoluteString) → \(http.statusCode)  bytes=\(data.count)  body=\(raw)")
         }
+        if url.absoluteString.contains("/api/v1/graph") {
+            let raw = String(data: data, encoding: .utf8)?.prefix(800) ?? ""
+            print("🩺[Graph] \(method) \(url.absoluteString) → \(http.statusCode)  bytes=\(data.count)  body=\(raw)")
+        }
         #endif
         if http.statusCode == 401 {
             // /auth/login bad-creds carry {detail}; guarded endpoints carry {code}; /auth/me and

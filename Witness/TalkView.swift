@@ -12,6 +12,7 @@ struct TalkView: View {
     @AppStorage(Profile.firstNameKey) private var firstName: String = ""
     @StateObject private var vm = WitnessSessionViewModel()
     @State private var draft = ""
+    @State private var showHistory = false
     @FocusState private var composerFocused: Bool
 
     var body: some View {
@@ -24,6 +25,7 @@ struct TalkView: View {
             }
         }
         .task { await begin() }
+        .sheet(isPresented: $showHistory) { ConversationHistoryView(scope: .talk, auth: auth) }
     }
 
     private func begin() async {
@@ -58,6 +60,9 @@ struct TalkView: View {
                 Text("Talk").font(.serif(22)).foregroundStyle(WV.teal)
             }
             Spacer()
+            Button { showHistory = true } label: {
+                Image(systemName: "clock.arrow.circlepath").font(.system(size: 16)).foregroundStyle(WV.teal).frame(height: 44)
+            }.witnessPress().witnessHint("Review past conversations with \(companion).")
             if vm.phase == .ended {
                 Button { newConversation() } label: {
                     Text("New").font(.system(size: 14, weight: .semibold)).foregroundStyle(WV.teal)

@@ -40,6 +40,9 @@ final class GraphViewModel: ObservableObject {
         } catch SessionError.sessionEnded {
             state = .failed("Your session has ended. Please sign in again.")
         } catch {
+            #if DEBUG
+            print("🩺[Graph] caught: \(error)")
+            #endif
             state = .failed("We couldn’t load your graph. Check your connection and try again.")
         }
     }
@@ -69,7 +72,7 @@ final class GraphViewModel: ObservableObject {
 
         let mappedNodes: [GNode] = rawNodes.map { n in
             GNode(id: n.id,
-                  label: n.label ?? n.nameComplete ?? "Unknown",
+                  label: n.label ?? "Unknown",   // nameComplete is a Bool flag, not a display string
                   primaryRel: (n.isNarrator == true) ? "self" : (primary[n.id] ?? ""),
                   isAnchor: n.isAnchor ?? false,
                   isNarrator: n.isNarrator ?? false,

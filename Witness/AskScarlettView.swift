@@ -190,6 +190,7 @@ struct AskScarlettView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var vm = WitnessSessionViewModel()
     @State private var draft = ""
+    @State private var showHistory = false
     @FocusState private var composerFocused: Bool
 
     var body: some View {
@@ -202,6 +203,9 @@ struct AskScarlettView: View {
             }
         }
         .task { await begin() }
+        .sheet(isPresented: $showHistory) {
+            ConversationHistoryView(scope: .memory(memory?.id ?? ""), auth: auth)
+        }
     }
 
     private func begin() async {
@@ -216,6 +220,11 @@ struct AskScarlettView: View {
             Button { dismiss() } label: {
                 Image(systemName: "chevron.down").font(.system(size: 17, weight: .semibold)).foregroundStyle(WT.ink.opacity(0.6)).frame(width: 44, height: 44)
             }.witnessPress()
+            if let id = memory?.id, !id.isEmpty {
+                Button { showHistory = true } label: {
+                    Image(systemName: "clock.arrow.circlepath").font(.system(size: 16)).foregroundStyle(WV.teal).frame(width: 40, height: 44)
+                }.witnessPress().witnessHint("Review past conversations about this memory.")
+            }
             Spacer()
             VStack(spacing: 2) {
                 Text("\(companion.uppercased())  ✦").font(.system(size: 11, weight: .semibold)).tracking(1.5).foregroundStyle(WV.gold)
