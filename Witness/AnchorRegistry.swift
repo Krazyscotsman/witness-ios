@@ -49,6 +49,7 @@ nonisolated struct RelationshipRow: Decodable, AnchorRow {
     let id: String
     var narratorId: String? = nil
     var personCanonicalName: String? = nil
+    var personEntityId: String? = nil          // matches a graph node id (person_entity_id → GNode.id)
     var firstName: String? = nil, middleName: String? = nil, lastName: String? = nil
     var nickname: String? = nil, maidenName: String? = nil
     var relationshipType: String? = nil, significance: String? = nil

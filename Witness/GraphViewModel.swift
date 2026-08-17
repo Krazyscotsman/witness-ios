@@ -13,6 +13,8 @@ final class GraphViewModel: ObservableObject {
     @Published private(set) var nodes: [GNode] = []
     @Published private(set) var edges: [GEdge] = []
     @Published private(set) var narratorId: String?
+    @Published private(set) var anchors: [RelationshipRow] = []   // /timeline/relationships — source of rel labels
+    private(set) var nodeByID: [String: GNode] = [:]
 
     static let snake: JSONDecoder = {
         let d = JSONDecoder(); d.keyDecodingStrategy = .convertFromSnakeCase; return d
@@ -34,6 +36,11 @@ final class GraphViewModel: ObservableObject {
             let r = try await withAuth(auth) {
                 try await APIClient.shared.get("/api/v1/graph", timeout: 30, decoder: Self.snake, as: GraphResponse.self)
             }
+            // /timeline/relationships — best-effort; supplies the ego ring + relationship labels. A failure here
+            // leaves anchors empty (focused/edge view still works; root ring is just sparse).
+            anchors = (try? await withAuth(auth) {
+                try await APIClient.shared.get("/timeline/relationships", timeout: 20, decoder: Self.snake, as: [RelationshipRow].self)
+            }) ?? []
             map(r)
         } catch APIError.http(let status, _) where status == 404 {
             state = .unavailable
@@ -83,7 +90,9 @@ final class GraphViewModel: ObservableObject {
 
         nodes = mappedNodes
         edges = mappedEdges
-        state = (mappedNodes.count <= 1 || mappedEdges.isEmpty) ? .empty : .loaded
+        nodeByID = Dictionary(mappedNodes.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        // Ego view can render from anchors alone, so "loaded" if we have any nodes or anchors.
+        state = (mappedNodes.isEmpty && anchors.isEmpty) ? .empty : .loaded
     }
 
     // 401 → refresh → retry-once

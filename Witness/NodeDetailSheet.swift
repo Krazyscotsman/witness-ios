@@ -42,6 +42,7 @@ final class EntityMemoriesViewModel: ObservableObject {
 struct NodeDetailSheet: View {
     let node: GNode
     @ObservedObject var auth: AuthManager
+    var onExplore: ((GNode) -> Void)? = nil        // graph re-center; hidden when nil
     @StateObject private var vm = EntityMemoriesViewModel()
 
     var body: some View {
@@ -50,6 +51,16 @@ struct NodeDetailSheet: View {
                 VStack(alignment: .leading, spacing: 16) {
                     identityHeader
                     factsCard
+                    if let onExplore {
+                        Button { onExplore(node) } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "point.3.connected.trianglepath.dotted").font(.system(size: 14, weight: .semibold))
+                                Text("Explore connections").font(.system(size: 15, weight: .semibold))
+                            }
+                            .foregroundStyle(.white).frame(maxWidth: .infinity).frame(height: 48)
+                            .background(WV.teal, in: RoundedRectangle(cornerRadius: 14))
+                        }.witnessPress()
+                    }
                     memoriesSection
                 }
                 .padding(.horizontal, 24).padding(.top, 14).padding(.bottom, 24)
@@ -67,7 +78,7 @@ struct NodeDetailSheet: View {
     private var identityHeader: some View {
         HStack(spacing: 12) {
             ZStack {
-                Circle().fill(node.isNarrator ? WV.teal : RelBucket.bucket(for: node.primaryRel).color).frame(width: 50, height: 50)
+                Circle().fill(node.isNarrator ? WV.teal : GraphClassify.edgeCategory(node.primaryRel).text).frame(width: 50, height: 50)
                 if node.isAnchor { Circle().stroke(WV.gold, lineWidth: 2.5).frame(width: 56, height: 56) }
             }
             VStack(alignment: .leading, spacing: 2) {
