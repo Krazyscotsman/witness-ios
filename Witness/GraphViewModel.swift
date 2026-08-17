@@ -3,7 +3,7 @@ import Combine
 
 // MARK: - Graph data (GET /api/v1/graph). Read-only. Maps the response into the existing GNode/GEdge layout
 // models and feeds them into the hand-written force-directed engine via GraphLayout.setGraph(). Each node's
-// primaryRel (which drives RelGroup color) is derived: anchor_rel_type → the relationship_type of its edge to
+// primaryRel (which drives RelBucket color/filter) is derived: anchor_rel_type → the relationship_type of its edge to
 // the narrator → its strongest incident edge → neutral. 404 → .unavailable (graceful). Fetch-once + refresh,
 // 401→refresh→retry.
 @MainActor

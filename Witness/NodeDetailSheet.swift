@@ -67,7 +67,7 @@ struct NodeDetailSheet: View {
     private var identityHeader: some View {
         HStack(spacing: 12) {
             ZStack {
-                Circle().fill(node.isNarrator ? WV.teal : RelGroup.color(for: node.primaryRel)).frame(width: 50, height: 50)
+                Circle().fill(node.isNarrator ? WV.teal : RelBucket.bucket(for: node.primaryRel).color).frame(width: 50, height: 50)
                 if node.isAnchor { Circle().stroke(WV.gold, lineWidth: 2.5).frame(width: 56, height: 56) }
             }
             VStack(alignment: .leading, spacing: 2) {

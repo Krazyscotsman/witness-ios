@@ -8,7 +8,7 @@ struct GraphView: View {
     @ObservedObject var auth: AuthManager
     @StateObject private var layout = GraphLayout(nodes: [], edges: [])
     @StateObject private var vm = GraphViewModel()
-    @State private var enabled: Set<String> = ["family","romantic","friend","professional","pet"]
+    @State private var selectedBucket: RelBucket? = nil          // nil = All
     @State private var selected: GNode?
 
     var body: some View {
@@ -33,7 +33,7 @@ struct GraphView: View {
         }
         .navigationBarBackButtonHidden(true).toolbar(.hidden, for: .navigationBar)
         .sheet(item: $selected) { NodeDetailSheet(node: $0, auth: auth) }
-        .onChange(of: enabled) { _, _ in layout.wake() }
+        .onChange(of: selectedBucket) { _, _ in layout.wake() }
         .task { await vm.load(auth: auth); applyIfLoaded() }
     }
 
@@ -125,7 +125,7 @@ struct GraphView: View {
                     for e in visibleEdges {
                         guard let a = layout.node(e.source), let b = layout.node(e.target) else { continue }
                         var path = Path(); path.move(to: a.pos); path.addLine(to: b.pos)
-                        ctx.stroke(path, with: .color(RelGroup.color(for: e.relType).opacity(0.45)), lineWidth: max(1, CGFloat(e.strength) * 2.5))
+                        ctx.stroke(path, with: .color(RelBucket.bucket(for: e.relType).color.opacity(0.45)), lineWidth: max(1, CGFloat(e.strength) * 2.5))
                     }
                 }
                 ForEach(layout.nodes) { node in
@@ -141,7 +141,7 @@ struct GraphView: View {
     }
 
     private func nodeView(_ node: GNode, in geo: GeometryProxy) -> some View {
-        let g = node.isNarrator ? WV.teal : RelGroup.color(for: node.primaryRel)
+        let g = node.isNarrator ? WV.teal : RelBucket.bucket(for: node.primaryRel).color
         let r = node.radius
         return VStack(spacing: 3) {
             ZStack {
@@ -165,36 +165,47 @@ struct GraphView: View {
             Text("Tap anyone to explore their connections").font(.system(size: 12)).foregroundStyle(WT.ink.opacity(0.45))
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    ForEach(RelGroup.all, id: \.key) { grp in
-                        let on = enabled.contains(grp.key)
-                        HStack(spacing: 6) {
-                            Circle().fill(grp.color).frame(width: 10, height: 10)
-                            Text(grp.label).font(.system(size: 13, weight: on ? .semibold : .regular)).foregroundStyle(on ? WT.ink : WT.ink.opacity(0.4))
-                        }
-                        .padding(.horizontal, 12).frame(height: 34)
-                        .background(on ? grp.color.opacity(0.1) : Color.white, in: Capsule())
-                        .overlay(Capsule().stroke(on ? grp.color.opacity(0.3) : WT.ink.opacity(0.1), lineWidth: 1))
-                        .onTapGesture { if on { enabled.remove(grp.key) } else { enabled.insert(grp.key) } }
-                    }
+                    bucketChip(nil)                                   // All
+                    ForEach(RelBucket.selectable, id: \.self) { bucketChip($0) }
                 }
                 .padding(.horizontal, 20)
             }
         }
         .padding(.vertical, 10).background(WV.parchment)
     }
+    @ViewBuilder private func bucketChip(_ b: RelBucket?) -> some View {
+        let on = (selectedBucket == b)
+        let tint = b?.color ?? WV.teal
+        HStack(spacing: 6) {
+            if let b { Circle().fill(b.color).frame(width: 10, height: 10) }
+            Text(b?.label ?? "All").font(.system(size: 13, weight: on ? .semibold : .regular)).foregroundStyle(on ? WT.ink : WT.ink.opacity(0.45))
+        }
+        .padding(.horizontal, 12).frame(height: 34)
+        .background(on ? tint.opacity(0.12) : Color.white, in: Capsule())
+        .overlay(Capsule().stroke(on ? tint.opacity(0.5) : WT.ink.opacity(0.1), lineWidth: 1))
+        .onTapGesture { withAnimation(.easeOut(duration: 0.15)) { selectedBucket = (selectedBucket == b) ? nil : b } }
+    }
 
     // MARK: helpers
+    private var matchingIDs: Set<String> {
+        guard let b = selectedBucket else { return Set(layout.nodes.map { $0.id }) }       // All
+        var s = Set<String>()
+        for n in layout.nodes where n.isNarrator || RelBucket.bucket(for: n.primaryRel) == b { s.insert(n.id) }
+        return s
+    }
     private var visibleEdges: [GEdge] {
-        layout.edges.filter { e in
-            guard enabled.contains(RelGroup.key(for: e.relType)) else { return false }
+        let ids = matchingIDs
+        return layout.edges.filter { e in
+            guard ids.contains(e.source), ids.contains(e.target) else { return false }
             if layout.mode == .ego { guard let nid = layout.narratorID else { return false }; return e.source == nid || e.target == nid }
             return true
         }
     }
     private func isVisible(_ n: GNode) -> Bool {
-        if layout.mode == .web { return true }
         if n.isNarrator { return true }
-        return visibleEdges.contains { $0.source == n.id || $0.target == n.id }
+        guard matchingIDs.contains(n.id) else { return false }
+        if layout.mode == .web { return true }
+        return visibleEdges.contains { $0.source == n.id || $0.target == n.id }            // ego: connected to narrator
     }
 }
 
@@ -203,19 +214,43 @@ enum GraphMode: CaseIterable { case ego, web
     var label: String { self == .ego ? "My Circle" : "Web" }
 }
 
-// MARK: - Relationship groups (verbatim colors/types)
-struct RelGroup {
-    let key: String; let label: String; let color: Color; let types: [String]
-    static let all: [RelGroup] = [
-        .init(key: "family", label: "Family", color: Color(hex: 0x534AB7),
-              types: ["parent_child","grandparent_grandchild","siblings","step_parent","in_law_parent","in_law_sibling","partners_parent","partners_sibling","aunt_uncle_niece_nephew","half_siblings","cousins"]),
-        .init(key: "romantic", label: "Romantic", color: Color(hex: 0xA32D2D), types: ["spouse","romantic"]),
-        .init(key: "friend", label: "Friends", color: Color(hex: 0x0F6E56), types: ["friend","best_friend","close_friend"]),
-        .init(key: "professional", label: "Professional", color: Color(hex: 0x5F5E5A), types: ["colleague","mentor","classmate","acquaintance","neighbor","professional"]),
-        .init(key: "pet", label: "Pets", color: Color(hex: 0x854F0B), types: ["pet_owner"]),
+// MARK: - Relationship buckets (client-side classification; drives filter chips AND node/edge color).
+// Mapped from the RAW relationship_type string — the server's precomputed colors are incomplete and unused.
+enum RelBucket: String, CaseIterable {
+    case romantic, family, professional, friends, other
+
+    var label: String {
+        switch self {
+        case .romantic: return "Romantic"; case .family: return "Family"; case .professional: return "Professional"
+        case .friends: return "Friends"; case .other: return "Other"
+        }
+    }
+    var color: Color {
+        switch self {
+        case .romantic:     return Color(hex: 0xA32D2D)
+        case .family:       return Color(hex: 0x534AB7)
+        case .professional: return Color(hex: 0x5F5E5A)
+        case .friends:      return Color(hex: 0x0F6E56)
+        case .other:        return Color(hex: 0x854F0B)
+        }
+    }
+    static let selectable: [RelBucket] = [.romantic, .family, .professional, .friends, .other]
+
+    private static let values: [RelBucket: Set<String>] = [
+        .romantic: ["spouse","romantic","partner","ex_spouse","ex_partner"],
+        .family: ["parent_child","child_of","siblings","half_siblings","step_parent","step_child",
+                  "grandparent_grandchild","great_grandparent","aunt_uncle_niece_nephew","great_aunt_uncle",
+                  "cousins","in_law_parent","in_law_sibling","in_law_child","partners_parent","partners_sibling",
+                  "family","twin","adopted_parent","adopted_child","foster_parent","foster_child","godparent","godchild"],
+        .professional: ["professional","colleague","boss","subordinate","mentor","mentee","client","classmate"],
+        .friends: ["friend","best_friend","close_friend","acquaintance","neighbor","roommate"],
+        // .other = participated_in, pet_owner, + anything unrecognized (fallback)
     ]
-    static func key(for relType: String) -> String { all.first { $0.types.contains(relType) }?.key ?? "professional" }
-    static func color(for relType: String) -> Color { all.first { $0.types.contains(relType) }?.color ?? Color(hex: 0x5F5E5A) }
+    static func bucket(for relType: String) -> RelBucket {
+        let key = relType.lowercased()
+        for b in [RelBucket.romantic, .family, .professional, .friends] where values[b]?.contains(key) == true { return b }
+        return .other
+    }
 }
 
 // MARK: - Node / Edge models
