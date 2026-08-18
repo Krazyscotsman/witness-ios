@@ -17,9 +17,6 @@ struct GraphView: View {
     @GestureState private var pinch: CGFloat = 1
     @State private var pan: CGSize = .zero
     @State private var panStart: CGSize?
-    @State private var fitScale: CGFloat = 1
-    @State private var contentCenter: CGPoint = .zero
-    @State private var canvasSize: CGSize = .zero
 
     private var field: EgoField {
         EgoLayout.compute(nodes: vm.nodes, nodeByID: vm.nodeByID, edges: vm.edges,
@@ -28,7 +25,7 @@ struct GraphView: View {
     private var narratorName: String { vm.nodes.first { $0.isNarrator }?.label ?? "you" }
 
     var body: some View {
-        ZStack(alignment: .top) {
+        ZStack {
             ParchmentBackground()
             Group {
                 switch vm.state {
@@ -37,15 +34,17 @@ struct GraphView: View {
                 case .unavailable:    centered { unavailableBlock }
                 case .failed(let m):  centered { failedBlock(m) }
                 case .loaded:
+                    // controls is a definite-height bar (its chip ScrollView is height-bounded) with a higher
+                    // layout priority, so the greedy canvas can't collapse it — it always renders above the
+                    // tab bar. navBar stays a top safe-area inset (definite height → reliably reserved).
                     VStack(spacing: 0) {
-                        Color.clear.frame(height: 52)
                         canvas
-                        controls
+                        controls.layoutPriority(1)
                     }
                 }
             }
-            navBar
         }
+        .safeAreaInset(edge: .top, spacing: 0) { navBar }
         .navigationBarBackButtonHidden(true).toolbar(.hidden, for: .navigationBar)
         .sheet(item: $selected) { node in
             NodeDetailSheet(node: node, auth: auth) { n in
@@ -57,7 +56,7 @@ struct GraphView: View {
     }
 
     private func centered<V: View>(@ViewBuilder _ content: () -> V) -> some View {
-        VStack { Spacer(); content(); Spacer() }.frame(maxWidth: .infinity).padding(.top, 52)
+        VStack { Spacer(); content(); Spacer() }.frame(maxWidth: .infinity)
     }
 
     private var loadingBlock: some View {
@@ -102,51 +101,67 @@ struct GraphView: View {
             Spacer()
             Text("Memory Graph").font(.serif(18)).foregroundStyle(WT.ink)
             Spacer()
-            Button { fitToView(canvasSize) } label: {
-                Image(systemName: "arrow.up.left.and.arrow.down.right").font(.system(size: 15, weight: .semibold)).foregroundStyle(WV.teal).frame(width: 44, height: 44)
-            }.witnessPress().witnessHint("Reset zoom and fit the graph to the screen.")
+            Button { resetView() } label: {
+                Image(systemName: "arrow.up.left.and.arrow.down.right").font(.system(size: 17, weight: .semibold)).foregroundStyle(WV.teal).frame(width: 44, height: 44)
+            }.witnessPress()   // no HintDot here — it crowded this top-right control; the fit-arrows icon is self-evident
         }
         .padding(.horizontal, 16).background(WV.parchment.opacity(0.96))
     }
 
-    // MARK: - Transform (virtual cx=420 space → screen)
-    private var liveScale: CGFloat { fitScale * zoom * pinch }
-    private func screen(_ v: CGPoint, _ geo: CGSize) -> CGPoint {
-        CGPoint(x: geo.width/2 + (v.x - contentCenter.x)*liveScale + pan.width,
-                y: geo.height/2 + (v.y - contentCenter.y)*liveScale + pan.height)
+    // MARK: - Transform (virtual cx=420 space → screen). The base fit (center + scale) is derived from the
+    // field's bounding box and the canvas size EVERY draw, so the graph is fit-and-centered on the first
+    // real-size render with no layout-timing dependency; the user's zoom/pan layer on top.
+    private struct GTransform { let center: CGPoint; let live: CGFloat }
+    private func fit(_ f: EgoField, _ geo: CGSize) -> GTransform {
+        var pts = f.ring1.map { $0.pos } + f.ring2.map { $0.pos }
+        if let c = f.center { pts.append(c.pos) }
+        guard let first = pts.first, geo.width > 1, geo.height > 1 else {
+            return GTransform(center: CGPoint(x: 420, y: 240), live: zoom * pinch)
+        }
+        var minX = first.x, maxX = first.x, minY = first.y, maxY = first.y
+        for p in pts { minX = min(minX, p.x); maxX = max(maxX, p.x); minY = min(minY, p.y); maxY = max(maxY, p.y) }
+        let bw = max(1, maxX - minX), bh = max(1, maxY - minY), margin: CGFloat = 100
+        let scale = min(max(min((geo.width - margin)/bw, (geo.height - margin)/bh), 0.2), 3)
+        return GTransform(center: CGPoint(x: (minX + maxX)/2, y: (minY + maxY)/2), live: scale * zoom * pinch)
     }
+    private func screen(_ v: CGPoint, _ geo: CGSize, _ tf: GTransform) -> CGPoint {
+        CGPoint(x: geo.width/2 + (v.x - tf.center.x)*tf.live + pan.width,
+                y: geo.height/2 + (v.y - tf.center.y)*tf.live + pan.height)
+    }
+    private func resetView() { withAnimation(.easeOut(duration: 0.2)) { zoom = 1; pan = .zero } }
 
-    // MARK: - Canvas (single immediate-mode draw of the radial field)
+    // MARK: - Canvas (single immediate-mode draw). No fit-on-appear/size plumbing — the transform is derived
+    // live in `fit(_:_:)`, so it's centered from the first real-size draw.
     private var canvas: some View {
         GeometryReader { geo in
-            Canvas { ctx, _ in drawEgo(ctx, geo.size, field) }
+            Canvas { ctx, _ in drawEgo(ctx, geo.size) }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
-                .gesture(panGesture(geo.size))
+                .gesture(panGesture)
                 .simultaneousGesture(MagnificationGesture().updating($pinch) { v, s, _ in s = v }
                     .onEnded { v in zoom = min(max(zoom * v, 0.3), 4) })
                 .simultaneousGesture(SpatialTapGesture().onEnded { ev in
-                    if let nd = nearestPlaced(to: ev.location, geo: geo.size, field) { selected = nd.node }
+                    if let nd = nearestPlaced(to: ev.location, geo: geo.size) { selected = nd.node }
                 })
-                .onAppear { canvasSize = geo.size; fitToView(geo.size) }
-                .onChange(of: geo.size) { _, s in canvasSize = s; fitToView(s) }
-                .onChange(of: focusedEntityId) { _, _ in fitToView(geo.size) }
-                .onChange(of: filters) { _, _ in fitToView(geo.size) }
-                .onChange(of: vm.anchors.count) { _, _ in fitToView(geo.size) }
+                // Re-center (clear user zoom/pan) when the ring set changes; base fit auto-centers the new set.
+                .onChange(of: focusedEntityId) { _, _ in resetView() }
+                .onChange(of: filters) { _, _ in resetView() }
         }
         .background(Color.white.opacity(0.4))
     }
 
-    private func drawEgo(_ ctx: GraphicsContext, _ geo: CGSize, _ f: EgoField) {
+    private func drawEgo(_ ctx: GraphicsContext, _ geo: CGSize) {
+        let f = field
+        let tf = fit(f, geo)
         guard let center = f.center else { return }
-        let cpt = screen(center.pos, geo)
-        drawGuide(ctx, cpt, f.ring1R * liveScale)
-        if !f.ring2.isEmpty { drawGuide(ctx, cpt, f.ring2R * liveScale) }
-        for nd in f.ring1 { spoke(ctx, cpt, screen(nd.pos, geo), nd.cat.border, dashed: false) }
-        for nd in f.ring2 { spoke(ctx, (nd.parentPos.map { screen($0, geo) } ?? cpt), screen(nd.pos, geo), WV.gold, dashed: true) }
-        for nd in f.ring2 { drawEgoNode(ctx, nd, geo, ring2: true) }
-        for nd in f.ring1 { drawEgoNode(ctx, nd, geo, ring2: false) }
-        drawCenter(ctx, center, cpt)
+        let cpt = screen(center.pos, geo, tf)
+        drawGuide(ctx, cpt, f.ring1R * tf.live)
+        if !f.ring2.isEmpty { drawGuide(ctx, cpt, f.ring2R * tf.live) }
+        for nd in f.ring1 { spoke(ctx, cpt, screen(nd.pos, geo, tf), nd.cat.border, dashed: false) }
+        for nd in f.ring2 { spoke(ctx, (nd.parentPos.map { screen($0, geo, tf) } ?? cpt), screen(nd.pos, geo, tf), WV.gold, dashed: true) }
+        for nd in f.ring2 { drawEgoNode(ctx, nd, geo, tf, ring2: true) }
+        for nd in f.ring1 { drawEgoNode(ctx, nd, geo, tf, ring2: false) }
+        drawCenter(ctx, center, cpt, tf)
     }
 
     private func drawGuide(_ ctx: GraphicsContext, _ c: CGPoint, _ r: CGFloat) {
@@ -158,9 +173,9 @@ struct GraphView: View {
         if dashed { ctx.stroke(path, with: .color(color.opacity(0.25)), style: StrokeStyle(lineWidth: 1, dash: [3, 4])) }
         else { ctx.stroke(path, with: .color(color.opacity(0.42)), lineWidth: 1.7) }
     }
-    private func drawEgoNode(_ ctx: GraphicsContext, _ nd: EgoPlaced, _ geo: CGSize, ring2: Bool) {
-        let p = screen(nd.pos, geo)
-        let r = nd.radius * liveScale
+    private func drawEgoNode(_ ctx: GraphicsContext, _ nd: EgoPlaced, _ geo: CGSize, _ tf: GTransform, ring2: Bool) {
+        let p = screen(nd.pos, geo, tf)
+        let r = nd.radius * tf.live
         let a: Double = ring2 ? 0.7 : 1.0
         let rect = CGRect(x: p.x - r, y: p.y - r, width: 2*r, height: 2*r)
         ctx.fill(Path(ellipseIn: rect), with: .color(nd.cat.bg.opacity(a)))
@@ -168,25 +183,25 @@ struct GraphView: View {
         if nd.node.id == selected?.id {
             ctx.stroke(Path(ellipseIn: CGRect(x: p.x-r-5, y: p.y-r-5, width: 2*r+10, height: 2*r+10)), with: .color(WV.teal), lineWidth: 2)
         }
-        drawText(ctx, nd.initials, at: p, size: (ring2 ? 10 : (nd.radius >= 26 ? 13 : 11)) * liveScale,
+        drawText(ctx, nd.initials, at: p, size: (ring2 ? 10 : (nd.radius >= 26 ? 13 : 11)) * tf.live,
                  color: nd.cat.text.opacity(a), anchor: .center, weight: .semibold)
-        let nameSize = (ring2 ? 9 : 11) * liveScale
-        drawText(ctx, nd.name, at: CGPoint(x: p.x, y: p.y + r + 4 * liveScale), size: nameSize,
+        let nameSize = (ring2 ? 9 : 11) * tf.live
+        drawText(ctx, nd.name, at: CGPoint(x: p.x, y: p.y + r + 4 * tf.live), size: nameSize,
                  color: WT.ink.opacity(0.85 * a), anchor: .top, weight: ring2 ? .regular : .medium)
         if let rel = nd.relLabel, !ring2 {
-            drawText(ctx, rel, at: CGPoint(x: p.x, y: p.y + r + 4 * liveScale + nameSize + 3 * liveScale),
-                     size: 9 * liveScale, color: WV.gold, anchor: .top, weight: .regular)
+            drawText(ctx, rel, at: CGPoint(x: p.x, y: p.y + r + 4 * tf.live + nameSize + 3 * tf.live),
+                     size: 9 * tf.live, color: WV.gold, anchor: .top, weight: .regular)
         }
     }
-    private func drawCenter(_ ctx: GraphicsContext, _ c: EgoPlaced, _ p: CGPoint) {
-        let r = 40 * liveScale
+    private func drawCenter(_ ctx: GraphicsContext, _ c: EgoPlaced, _ p: CGPoint, _ tf: GTransform) {
+        let r = 40 * tf.live
         let rect = CGRect(x: p.x - r, y: p.y - r, width: 2*r, height: 2*r)
         ctx.fill(Path(ellipseIn: rect), with: .color(Color(hex: 0x0f172a)))
         ctx.stroke(Path(ellipseIn: rect), with: .color(WV.gold), lineWidth: 2.5)
-        drawText(ctx, c.initials, at: p, size: 16 * liveScale, color: .white, anchor: .center, weight: .semibold)
+        drawText(ctx, c.initials, at: p, size: 16 * tf.live, color: .white, anchor: .center, weight: .semibold)
         if focusedEntityId == nil {
-            drawText(ctx, "Click anyone to explore", at: CGPoint(x: p.x, y: p.y + r + 6 * liveScale),
-                     size: 10 * liveScale, color: WT.ink.opacity(0.45), anchor: .top, weight: .regular)
+            drawText(ctx, "Click anyone to explore", at: CGPoint(x: p.x, y: p.y + r + 6 * tf.live),
+                     size: 10 * tf.live, color: WT.ink.opacity(0.45), anchor: .top, weight: .regular)
         }
     }
     private func drawText(_ ctx: GraphicsContext, _ s: String, at p: CGPoint, size: CGFloat, color: Color, anchor: UnitPoint, weight: Font.Weight) {
@@ -197,7 +212,7 @@ struct GraphView: View {
     }
 
     // MARK: - Gestures + fit
-    private func panGesture(_ geo: CGSize) -> some Gesture {
+    private var panGesture: some Gesture {
         DragGesture(minimumDistance: 2)
             .onChanged { v in
                 if panStart == nil { panStart = pan }
@@ -205,65 +220,63 @@ struct GraphView: View {
             }
             .onEnded { _ in panStart = nil }
     }
-    private func nearestPlaced(to p: CGPoint, geo: CGSize, _ f: EgoField) -> EgoPlaced? {
+    private func nearestPlaced(to p: CGPoint, geo: CGSize) -> EgoPlaced? {
+        let f = field
+        let tf = fit(f, geo)
         var all = f.ring1 + f.ring2
         if let c = f.center { all.append(c) }
         var best: (EgoPlaced, CGFloat)?
         for nd in all {
-            let sp = screen(nd.pos, geo); let d = hypot(sp.x - p.x, sp.y - p.y)
-            let hit = max(20, nd.radius * liveScale + 8)
+            let sp = screen(nd.pos, geo, tf); let d = hypot(sp.x - p.x, sp.y - p.y)
+            let hit = max(20, nd.radius * tf.live + 8)
             if d <= hit, best == nil || d < best!.1 { best = (nd, d) }
         }
         return best?.0
     }
-    private func fitToView(_ geo: CGSize) {
-        guard geo != .zero else { return }
-        let f = field
-        var pts = f.ring1.map { $0.pos } + f.ring2.map { $0.pos }
-        if let c = f.center { pts.append(c.pos) }
-        guard let first = pts.first else { return }
-        var minX = first.x, maxX = first.x, minY = first.y, maxY = first.y
-        for p in pts { minX = min(minX, p.x); maxX = max(maxX, p.x); minY = min(minY, p.y); maxY = max(maxY, p.y) }
-        let bw = max(1, maxX - minX), bh = max(1, maxY - minY), margin: CGFloat = 120
-        contentCenter = CGPoint(x: (minX + maxX)/2, y: (minY + maxY)/2)
-        fitScale = min(max(min((geo.width - margin)/bw, (geo.height - margin)/bh), 0.2), 2.5)
-        zoom = 1; pan = .zero
-    }
 
     // MARK: - Controls: back / hint + "Visible bonds"
     private var controls: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 8) {
             if focusedEntityId != nil {
                 Button { withAnimation { focusedEntityId = nil } } label: {
-                    HStack(spacing: 6) { Image(systemName: "chevron.left").font(.system(size: 13, weight: .semibold)); Text("Back to \(narratorName)").font(.system(size: 14, weight: .medium)) }
-                        .foregroundStyle(WV.teal)
+                    HStack(spacing: 6) { Image(systemName: "chevron.left").font(.system(size: 14, weight: .semibold)); Text("Back to \(narratorName)").font(.system(size: 15, weight: .medium)) }
+                        .foregroundStyle(WV.teal).frame(height: 44)
                 }.witnessPress()
             }
             HStack {
                 Text("VISIBLE BONDS").font(.system(size: 11, weight: .semibold)).tracking(1).foregroundStyle(WT.ink.opacity(0.4))
                 Spacer()
                 Button { withAnimation { filters = Set(GraphCat.allCases) } } label: {
-                    Text("Reset").font(.system(size: 12, weight: .medium)).foregroundStyle(WV.teal)
-                }
+                    Text("Reset").font(.system(size: 14, weight: .medium)).foregroundStyle(WV.teal)
+                        .frame(minWidth: 44, minHeight: 44, alignment: .trailing)
+                }.witnessPress()
             }
             .padding(.horizontal, 20)
+            // Height-bounded so the bar has a DEFINITE height and can't be collapsed by the greedy canvas.
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) { ForEach(GraphCat.allCases) { catChip($0) } }
                     .padding(.horizontal, 20)
             }
+            .frame(height: 48)
         }
-        .padding(.vertical, 10).background(WV.parchment)
+        // Pushed views extend under the custom tab bar (app convention = 110pt clearance), so pad the panel up
+        // so the whole header + chips + reset sits above it.
+        .padding(.top, 8).padding(.bottom, 110)
+        .frame(maxWidth: .infinity)
+        .background(WV.parchment)
+        .overlay(alignment: .top) { Rectangle().fill(WT.ink.opacity(0.08)).frame(height: 1) }
     }
     private func catChip(_ c: GraphCat) -> some View {
         let on = filters.contains(c)
         return HStack(spacing: 6) {
-            Image(systemName: on ? "eye" : "eye.slash").font(.system(size: 11)).foregroundStyle(on ? c.text : WT.ink.opacity(0.3))
+            Image(systemName: on ? "eye" : "eye.slash").font(.system(size: 12)).foregroundStyle(on ? c.text : WT.ink.opacity(0.3))
             Circle().fill(c.border).frame(width: 10, height: 10)
-            Text(c.label).font(.system(size: 13, weight: on ? .semibold : .regular)).foregroundStyle(on ? WT.ink : WT.ink.opacity(0.4))
+            Text(c.label).font(.system(size: 14, weight: on ? .semibold : .regular)).foregroundStyle(on ? WT.ink : WT.ink.opacity(0.4))
         }
-        .padding(.horizontal, 12).frame(height: 34)
+        .padding(.horizontal, 14).frame(height: 44)   // 44pt tap target (HIG)
         .background(on ? c.bg : Color.white, in: Capsule())
         .overlay(Capsule().stroke(on ? c.border : WT.ink.opacity(0.1), lineWidth: 1))
+        .contentShape(Capsule())
         .onTapGesture { withAnimation(.easeOut(duration: 0.15)) { if on { filters.remove(c) } else { filters.insert(c) } } }
     }
 }
