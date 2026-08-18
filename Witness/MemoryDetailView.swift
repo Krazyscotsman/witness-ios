@@ -10,6 +10,8 @@ struct MemoryDetailView: View {
     @StateObject private var speaker = Speaker()
     @State private var audioURL: URL?
     @State private var showAsk = false
+    @State private var onlyDefaultVoice = false
+    @AppStorage("hint.enhancedVoiceDismissed") private var enhancedVoiceHintDismissed = false
 
     // Set true once a memory carries a real cover photo; none today.
     private var hasCoverPhoto: Bool { false }
@@ -56,6 +58,7 @@ struct MemoryDetailView: View {
         .onAppear {
             audioURL = resolveMemoryAudioURL()
             if let url = audioURL { audioPlayer.load(url) }
+            onlyDefaultVoice = Speaker.readingVoiceInfo().isDefaultOnly
         }
         .onDisappear { audioPlayer.stop(); speaker.stop() }
         .sheet(isPresented: $showAsk) {
@@ -85,8 +88,9 @@ struct MemoryDetailView: View {
         VStack(alignment: .leading, spacing: 18) {
             // Playback controls live ABOVE the narrative so they're reachable without scrolling a
             // very large memory. Read aloud (on-device TTS of the written words) + the recording player.
-            readAloudControl
+            readAloudRow
             if speaker.isSpeaking || speaker.isPaused { readAloudProgress }
+            enhancedVoiceHint
             if audioURL != nil {
                 listenPlayer
             } else {
@@ -369,6 +373,42 @@ struct MemoryDetailView: View {
         else { speaker.stop(); audioPlayer.play() }   // stop Read-aloud so they don't overlap
     }
 
+    // Read-aloud pill + a Stop button (shown while speaking/paused) on one row.
+    private var readAloudRow: some View {
+        HStack(spacing: 10) {
+            readAloudControl
+            if speaker.isSpeaking || speaker.isPaused {
+                Button { speaker.stop() } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "stop.fill").font(.system(size: 13, weight: .medium))
+                        Text("Stop").font(.system(size: 14, weight: .medium))
+                    }
+                    .foregroundStyle(WV.danger)
+                    .padding(.horizontal, 14).frame(height: 38)
+                    .background(WV.danger.opacity(0.10), in: Capsule())
+                    .overlay(Capsule().stroke(WV.danger.opacity(0.25), lineWidth: 1))
+                }.witnessPress()
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    // One-time, dismissible nudge to install a higher-quality voice (only when nothing better is available).
+    @ViewBuilder private var enhancedVoiceHint: some View {
+        if onlyDefaultVoice && !enhancedVoiceHintDismissed {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "speaker.wave.2").font(.system(size: 13)).foregroundStyle(WV.gold)
+                Text("For a more natural voice, add an Enhanced or Premium voice in Settings → Accessibility → Spoken Content → Voices, then reopen.")
+                    .font(.system(size: 12)).foregroundStyle(WT.ink.opacity(0.6)).fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 4)
+                Button { enhancedVoiceHintDismissed = true } label: {
+                    Image(systemName: "xmark").font(.system(size: 11, weight: .semibold)).foregroundStyle(WT.ink.opacity(0.4)).frame(width: 28, height: 28)
+                }.witnessPress()
+            }
+            .padding(12).background(WV.gold.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+        }
+    }
+
     // Read aloud: speaks the memory's WRITTEN text via on-device TTS. Distinct from "Listen"
     // (original audio recording). Tap toggles read → pause → resume.
     private var readAloudControl: some View {
@@ -405,6 +445,9 @@ struct MemoryDetailView: View {
         return VStack(alignment: .leading, spacing: 6) {
             Text("Reading \(n) of \(m)")
                 .font(.system(size: 12, weight: .medium)).foregroundStyle(WT.ink.opacity(0.5))
+            if !speaker.voiceName.isEmpty {
+                Text("Voice: \(speaker.voiceName)").font(.system(size: 11)).foregroundStyle(WT.ink.opacity(0.4))
+            }
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     Capsule().fill(WT.ink.opacity(0.1))
@@ -430,24 +473,10 @@ struct MemoryDetailView: View {
         return String(format: "%01d:%02d", s / 60, s % 60)
     }
 
-    /// Resolves the audio to play for a memory.
-    /// PLACEHOLDER until GET /api/v1/memories/{id}/audio: for now, play the most-recent local
-    /// recording in Documents/Recordings/, or nil.
-    private func resolveMemoryAudioURL() -> URL? {
-        let fm = FileManager.default
-        guard let docs = fm.urls(for: .documentDirectory, in: .userDomainMask).first else { return nil }
-        let dir = docs.appendingPathComponent("Recordings", isDirectory: true)
-        guard let files = try? fm.contentsOfDirectory(
-            at: dir, includingPropertiesForKeys: [.contentModificationDateKey], options: [.skipsHiddenFiles]
-        ) else { return nil }
-        return files
-            .filter { $0.pathExtension.lowercased() == "m4a" }
-            .max { a, b in
-                let da = (try? a.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-                let db = (try? b.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-                return da < db
-            }
-    }
+    /// Resolves the audio to play for a memory. Returns nil for now: there is no per-memory audio endpoint yet,
+    /// so we must NOT play an unrelated local recording (the old random-.m4a placeholder). When
+    /// GET /api/v1/memories/{id}/audio exists, resolve + return it here — the listenPlayer UI is ready for it.
+    private func resolveMemoryAudioURL() -> URL? { nil }
 
     private var askCard: some View {
         Button { showAsk = true } label: {
