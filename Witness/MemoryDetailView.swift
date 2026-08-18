@@ -5,13 +5,31 @@ struct MemoryDetailView: View {
     @ObservedObject var auth: AuthManager
     @Environment(\.dismiss) private var dismiss
     @AppStorage(Profile.companionNameKey) private var companion: String = Profile.defaultCompanionName
+    @AppStorage(Profile.voiceKey) private var voiceKey: String = "playful_female"
+    @AppStorage("listen.preferHD") private var preferHD = false
     @StateObject private var vm = MemoryDetailViewModel()
-    @StateObject private var audioPlayer = AudioPlayer()
+    @StateObject private var audioPlayer = AudioPlayer()          // now the HD (WAV) player
     @StateObject private var speaker = Speaker()
-    @State private var audioURL: URL?
     @State private var showAsk = false
     @State private var onlyDefaultVoice = false
+    @State private var hdPhase: HDPhase = .idle
+    @State private var hdLoadedKey: String?                       // memoryId|voice already fetched this session
     @AppStorage("hint.enhancedVoiceDismissed") private var enhancedVoiceHintDismissed = false
+
+    enum HDPhase: Equatable { case idle, preparing, failed(String) }
+    enum ListenMode { case device, hd }
+    private enum HDErr: Error { case decode }
+
+    private static let snake: JSONDecoder = { let d = JSONDecoder(); d.keyDecodingStrategy = .convertFromSnakeCase; return d }()
+    private static let hdCharLimit = 9000
+    private static let validHDVoices: Set<String> = ["Kore","Leda","Aoede","Orus","Charon","Puck"]   // 6 the app emits (⊂ backend's 8)
+
+    private var hdVoice: String {
+        let g = VoiceOption.geminiName(for: voiceKey)
+        return Self.validHDVoices.contains(g) ? g : "Kore"
+    }
+    private var hdAllowed: Bool { (vm.detail?.narrative?.count ?? .max) <= Self.hdCharLimit }   // needs detail + short enough
+    private var mode: ListenMode { (preferHD && hdAllowed) ? .hd : .device }
 
     // Set true once a memory carries a real cover photo; none today.
     private var hasCoverPhoto: Bool { false }
@@ -56,8 +74,6 @@ struct MemoryDetailView: View {
         .toolbar(.hidden, for: .navigationBar)
         .task { await vm.load(id: listItem.id, auth: auth) }
         .onAppear {
-            audioURL = resolveMemoryAudioURL()
-            if let url = audioURL { audioPlayer.load(url) }
             onlyDefaultVoice = Speaker.readingVoiceInfo().isDefaultOnly
         }
         .onDisappear { audioPlayer.stop(); speaker.stop() }
@@ -88,15 +104,7 @@ struct MemoryDetailView: View {
         VStack(alignment: .leading, spacing: 18) {
             // Playback controls live ABOVE the narrative so they're reachable without scrolling a
             // very large memory. Read aloud (on-device TTS of the written words) + the recording player.
-            readAloudRow
-            if speaker.isSpeaking || speaker.isPaused { readAloudProgress }
-            enhancedVoiceHint
-            if audioURL != nil {
-                listenPlayer
-            } else {
-                Text("No recording to play yet.")
-                    .font(.system(size: 13)).foregroundStyle(WT.ink.opacity(0.4))
-            }
+            listenSurface
 
             narrative
 
@@ -332,64 +340,144 @@ struct MemoryDetailView: View {
         }
     }
 
-    // Compact playback bar (mirrors the saved-screen player). Shown when audio exists.
-    private var listenPlayer: some View {
-        HStack(spacing: 14) {
-            Button { toggleListen() } label: {
-                ZStack {
-                    Circle().fill(WV.teal)
-                    Image(systemName: audioPlayer.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: 18, weight: .bold)).foregroundStyle(.white)
-                }
-                .frame(width: 52, height: 52)
+    // MARK: - Listen surface (Device ↔ HD toggle behind one transport)
+    private var listenSurface: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                modeChip("Device voice", active: mode == .device) { setPreferHD(false) }
+                modeChip("HD voice", active: mode == .hd, disabled: !hdAllowed) { if hdAllowed { setPreferHD(true) } }
+                Spacer(minLength: 0)
             }
-            .witnessPress()
-
-            VStack(spacing: 6) {
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(WT.ink.opacity(0.1))
-                        Capsule().fill(WV.teal)
-                            .frame(width: max(0, geo.size.width * audioPlayer.progress))
+            HStack(spacing: 10) {
+                Button { primaryTapped() } label: {
+                    HStack(spacing: 7) {
+                        Image(systemName: primaryIcon).font(.system(size: 14, weight: .medium))
+                        Text(primaryLabel).font(.system(size: 14, weight: .medium))
                     }
+                    .foregroundStyle(WV.teal).padding(.horizontal, 14).frame(height: 38)
+                    .background(WV.teal.opacity(0.10), in: Capsule())
+                    .overlay(Capsule().stroke(WV.teal.opacity(0.25), lineWidth: 1))
                 }
-                .frame(height: 6)
-                HStack {
-                    Text(mmss(audioPlayer.currentTime))
-                    Spacer()
-                    Text(mmss(audioPlayer.duration))
+                .disabled(primaryDisabled).opacity(primaryDisabled ? 0.45 : 1)
+                .witnessPress()
+                .witnessHint("Read this memory aloud — device voice or HD.")
+                if listenActive {
+                    Button { stopListen() } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "stop.fill").font(.system(size: 13, weight: .medium))
+                            Text("Stop").font(.system(size: 14, weight: .medium))
+                        }
+                        .foregroundStyle(WV.danger).padding(.horizontal, 14).frame(height: 38)
+                        .background(WV.danger.opacity(0.10), in: Capsule())
+                        .overlay(Capsule().stroke(WV.danger.opacity(0.25), lineWidth: 1))
+                    }.witnessPress()
                 }
-                .font(.system(size: 12, design: .monospaced)).foregroundStyle(WT.ink.opacity(0.5))
+                Spacer(minLength: 0)
+            }
+            if mode == .device {
+                if speaker.isSpeaking || speaker.isPaused { readAloudProgress }
+                enhancedVoiceHint
+            } else {
+                hdStatus
             }
         }
-        .padding(16)
-        .background(WV.card, in: RoundedRectangle(cornerRadius: 18))
-        .overlay(RoundedRectangle(cornerRadius: 18).stroke(WT.ink.opacity(0.07), lineWidth: 1))
     }
 
-    private func toggleListen() {
-        guard audioURL != nil else { return }
-        if audioPlayer.isPlaying { audioPlayer.pause() }
-        else { speaker.stop(); audioPlayer.play() }   // stop Read-aloud so they don't overlap
+    private func modeChip(_ title: String, active: Bool, disabled: Bool = false, _ tap: @escaping () -> Void) -> some View {
+        Text(title)
+            .font(.system(size: 13, weight: active ? .semibold : .regular))
+            .foregroundStyle(disabled ? WT.ink.opacity(0.3) : (active ? .white : WT.ink.opacity(0.6)))
+            .padding(.horizontal, 12).frame(height: 34)
+            .background(active ? WV.teal : Color.white, in: Capsule())
+            .overlay(Capsule().stroke(active ? Color.clear : WT.ink.opacity(0.12), lineWidth: 1))
+            .contentShape(Capsule())
+            .onTapGesture { if !disabled { withAnimation(.easeOut(duration: 0.15)) { tap() } } }
     }
 
-    // Read-aloud pill + a Stop button (shown while speaking/paused) on one row.
-    private var readAloudRow: some View {
-        HStack(spacing: 10) {
-            readAloudControl
-            if speaker.isSpeaking || speaker.isPaused {
-                Button { speaker.stop() } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "stop.fill").font(.system(size: 13, weight: .medium))
-                        Text("Stop").font(.system(size: 14, weight: .medium))
-                    }
-                    .foregroundStyle(WV.danger)
-                    .padding(.horizontal, 14).frame(height: 38)
-                    .background(WV.danger.opacity(0.10), in: Capsule())
-                    .overlay(Capsule().stroke(WV.danger.opacity(0.25), lineWidth: 1))
-                }.witnessPress()
+    @ViewBuilder private var hdStatus: some View {
+        switch hdPhase {
+        case .preparing:
+            HStack(spacing: 8) {
+                ProgressView().tint(WV.teal)
+                Text("Preparing HD audio…").font(.system(size: 13)).foregroundStyle(WT.ink.opacity(0.55))
             }
-            Spacer(minLength: 0)
+        case .failed(let m):
+            Text(m).font(.system(size: 12)).foregroundStyle(WV.danger).fixedSize(horizontal: false, vertical: true)
+        case .idle:
+            if !hdAllowed {
+                Text("This memory is too long for HD yet — coming soon. Device voice is available.")
+                    .font(.system(size: 12)).foregroundStyle(WT.ink.opacity(0.5)).fixedSize(horizontal: false, vertical: true)
+            } else if audioPlayer.duration > 0 {
+                VStack(spacing: 6) {
+                    GeometryReader { geo in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(WT.ink.opacity(0.1))
+                            Capsule().fill(WV.teal).frame(width: max(0, geo.size.width * audioPlayer.progress))
+                        }
+                    }.frame(height: 6)
+                    HStack {
+                        Text(mmss(audioPlayer.currentTime))
+                        Spacer()
+                        Text("Voice: \(hdVoice) · HD")
+                        Spacer()
+                        Text(mmss(audioPlayer.duration))
+                    }
+                    .font(.system(size: 11)).foregroundStyle(WT.ink.opacity(0.5))
+                }
+            }
+        }
+    }
+
+    // MARK: transport routing
+    private var listenActive: Bool {
+        mode == .device ? (speaker.isSpeaking || speaker.isPaused) : (audioPlayer.isPlaying || audioPlayer.duration > 0 || hdPhase == .preparing)
+    }
+    private var primaryDisabled: Bool {
+        if mode == .device { return vm.paragraphs.isEmpty && spokenText.isEmpty }
+        return hdPhase == .preparing || !hdAllowed
+    }
+    private var primaryIcon: String {
+        if mode == .device { return speaker.isPaused ? "play.fill" : (speaker.isSpeaking ? "pause.fill" : "text.bubble.fill") }
+        return audioPlayer.isPlaying ? "pause.fill" : "play.fill"
+    }
+    private var primaryLabel: String {
+        if mode == .device { return speaker.isPaused ? "Resume" : (speaker.isSpeaking ? "Pause" : "Read aloud") }
+        return audioPlayer.isPlaying ? "Pause" : (audioPlayer.duration > 0 ? "Play" : "Play HD")
+    }
+    private func primaryTapped() {
+        if mode == .device { toggleReadAloud() }
+        else {
+            if hdPhase == .preparing { return }
+            if audioPlayer.isPlaying { audioPlayer.pause() }
+            else { Task { await playHD() } }        // resumes if cached (play()) else fetches
+        }
+    }
+    private func stopListen() { speaker.stop(); audioPlayer.stop() }
+    private func setPreferHD(_ on: Bool) { stopListen(); hdPhase = .idle; preferHD = on }
+
+    private func playHD() async {
+        speaker.stop()
+        let key = "\(listItem.id)|\(hdVoice)"
+        if key == hdLoadedKey, audioPlayer.duration > 0 { audioPlayer.play(); return }   // cached this session
+        hdPhase = .preparing
+        let path = "/api/v1/memories/\(listItem.id)/audio?voice=\(hdVoice)&style=warm_memory"
+        do {
+            let r = try await getHD(path)
+            guard let b64 = r.audioBase64, let data = Data(base64Encoded: b64), !data.isEmpty else { throw HDErr.decode }
+            audioPlayer.load(data); audioPlayer.play()
+            hdLoadedKey = key; hdPhase = .idle
+        } catch {
+            hdPhase = .failed("HD voice isn’t available right now — using the device voice.")
+            preferHD = false                        // graceful fallback to Device
+        }
+    }
+    private func getHD(_ path: String) async throws -> MemoryAudioResponse {
+        do { return try await APIClient.shared.get(path, timeout: 60, decoder: Self.snake, as: MemoryAudioResponse.self) }
+        catch APIError.unauthorized(_, let code) {
+            if await auth.handleUnauthorized(code: code) {
+                return try await APIClient.shared.get(path, timeout: 60, decoder: Self.snake, as: MemoryAudioResponse.self)
+            }
+            throw HDErr.decode
         }
     }
 
@@ -472,11 +560,6 @@ struct MemoryDetailView: View {
         let s = Int(t.rounded(.down))
         return String(format: "%01d:%02d", s / 60, s % 60)
     }
-
-    /// Resolves the audio to play for a memory. Returns nil for now: there is no per-memory audio endpoint yet,
-    /// so we must NOT play an unrelated local recording (the old random-.m4a placeholder). When
-    /// GET /api/v1/memories/{id}/audio exists, resolve + return it here — the listenPlayer UI is ready for it.
-    private func resolveMemoryAudioURL() -> URL? { nil }
 
     private var askCard: some View {
         Button { showAsk = true } label: {

@@ -37,6 +37,24 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         isPlaying = false
     }
 
+    /// Builds the player from in-memory audio (e.g. a decoded base64 WAV). Same reset/fail behavior as load(url:).
+    func load(_ data: Data) {
+        stopTimer()
+        do {
+            let p = try AVAudioPlayer(data: data)
+            p.delegate = self
+            p.prepareToPlay()
+            player = p
+            duration = p.duration
+        } catch {
+            player = nil
+            duration = 0
+        }
+        currentTime = 0
+        progress = 0
+        isPlaying = false
+    }
+
     // MARK: Transport
 
     func play() {

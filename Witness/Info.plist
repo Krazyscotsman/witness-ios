@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleIdentifier</key>
-	<string></string>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSExceptionDomains</key>
@@ -25,7 +25,7 @@
 	<string>Witness transcribes your recordings on your device so your memories become searchable text.</string>
 	<key>UIAppFonts</key>
 	<array>
-		<string> PlayfairDisplay-SemiBold.ttf</string>
+		<string>PlayfairDisplay-SemiBold.ttf</string>
 	</array>
 </dict>
 </plist>

@@ -704,6 +704,17 @@ nonisolated struct MediaItemDTO: Decodable, Identifiable {
 }
 nonisolated struct MediaURLResponse: Decodable { let url: String? }   // GET /api/v1/media/{id}/url (presign refresh)
 
+// GET /api/v1/memories/{id}/audio?voice=&style=warm_memory → base64 WAV + meta (HD/Gemini memory voice).
+// .convertFromSnakeCase.
+nonisolated struct MemoryAudioResponse: Decodable {
+    let audioBase64: String?
+    let mimeType: String?
+    let duration: Double?
+    let voice: String?
+    let style: String?
+    let characterCount: Int?
+}
+
 // MARK: - Graph (GET /api/v1/graph) — relationship/entity map. Decoded with .convertFromSnakeCase. Precomputed
 // styling (color/border_color/size/line_style/width) is decoded but INTENTIONALLY UNUSED — the app palette
 // (RelGroup + WV/WT) drives rendering. `nonisolated`: decoded off-main in APIClient.
