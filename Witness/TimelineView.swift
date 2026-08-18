@@ -30,7 +30,7 @@ struct TimelineView: View {
         }
         .navigationBarBackButtonHidden(true).toolbar(.hidden, for: .navigationBar)
         .task { await vm.load(auth: auth) }
-        .fullScreenCover(isPresented: $showRecord) { RecordView() }
+        .fullScreenCover(isPresented: $showRecord) { RecordView(auth: auth) }
     }
 
     private var content: some View {

@@ -36,9 +36,6 @@ final class WitnessSessionViewModel: ObservableObject {
         } catch SessionError.sessionEnded {
             phase = .failed("Your session has ended. Please sign in again.")
         } catch {
-            #if DEBUG
-            print("🩺[WitnessStart] caught: \(error)")
-            #endif
             phase = .failed("We couldn’t start the conversation. Please check your connection and try again.")
         }
     }
@@ -63,9 +60,6 @@ final class WitnessSessionViewModel: ObservableObject {
         } catch SessionError.sessionEnded {
             phase = .failed("Your session has ended. Please sign in again.")
         } catch {
-            #if DEBUG
-            print("🩺[WitnessStart] caught: \(error)")
-            #endif
             phase = .failed("We couldn’t start the conversation. Please check your connection and try again.")
         }
     }

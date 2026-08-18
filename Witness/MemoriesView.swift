@@ -29,7 +29,9 @@ struct MemoriesView: View {
             }
         }
         .task { await vm.load(auth: auth) }        // fetch-once (VM guards)
-        .fullScreenCover(isPresented: $showRecord) { RecordView() }
+        .fullScreenCover(isPresented: $showRecord) {
+            RecordView(auth: auth) { Task { await vm.refresh(auth: auth) } }
+        }
         .fullScreenCover(isPresented: $showGallery) { MediaView(auth: auth) }
     }
 

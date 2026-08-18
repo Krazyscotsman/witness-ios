@@ -11,23 +11,32 @@ struct RecordView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage(Profile.companionNameKey) private var companion: String = Profile.defaultCompanionName
 
+    @ObservedObject var auth: AuthManager
+    /// Called once after a successful save so the presenter can refresh its list (e.g. Memories).
+    var onSaved: (() -> Void)? = nil
+
     enum Mode: String, CaseIterable { case speak = "Speak", type = "Type" }
     @StateObject private var recorder = AudioRecorder()
     @StateObject private var audioPlayer = AudioPlayer()
-    @StateObject private var transcriber = Transcriber()   // TEMP: item-3 engine validation
+    @StateObject private var transcriber = Transcriber()   // on-device transcript for the review screen
+    @StateObject private var saver = MemoryCreateViewModel()
+
+    // Capture → review (Speak) / compose (Type) → processing → done | failed.
+    enum Stage: Equatable { case compose, reviewing, processing, done, failed(String) }
+    @State private var stage: Stage = .compose
+    @State private var sessionID = ""      // client-minted UUID, generated when capture begins
+    @State private var reviewText = ""     // editable on-device transcript (Speak)
 
     @State private var mode: Mode = .speak
     @State private var title = ""
     @State private var dateText = ""
     @State private var bodyText = ""
-    @State private var saved = false
 
     var body: some View {
         ZStack {
             ParchmentBackground()
-            if saved {
-                savedView
-            } else {
+            switch stage {
+            case .compose:
                 VStack(spacing: 0) {
                     topBar
                     if !recorder.isRecording {
@@ -37,6 +46,14 @@ struct RecordView: View {
                     }
                     if mode == .speak { speakMode } else { typeMode }
                 }
+            case .reviewing:
+                reviewingView
+            case .processing:
+                processingView
+            case .done:
+                savedView
+            case .failed(let message):
+                failedView(message)
             }
         }
         .alert("Microphone Access Needed", isPresented: $recorder.permissionDenied) {
@@ -111,7 +128,7 @@ struct RecordView: View {
                     secondaryControl("trash") { cancelRecording() }
                 }
             } else {
-                micButton(systemName: "mic.fill") { recorder.startRecording() }
+                micButton(systemName: "mic.fill") { beginRecording() }
             }
 
             Spacer()
@@ -208,9 +225,6 @@ struct RecordView: View {
                 playbackBar
                     .padding(.top, 6)
             }
-            if recorder.lastRecordingURL != nil {
-                transcribeScaffold
-            }
 
             Spacer()
         }
@@ -231,38 +245,164 @@ struct RecordView: View {
         .onDisappear { audioPlayer.stop(); transcriber.cancel() }
     }
 
-    // TEMP SCAFFOLD (item 3): validates the on-device Transcriber engine. NOT a shipped
-    // feature — remove once transcription is wired into the real flow.
-    private var transcribeScaffold: some View {
-        VStack(spacing: 8) {
-            Button {
-                if let url = recorder.lastRecordingURL { transcriber.transcribe(url: url) }
-            } label: {
-                Text(transcriber.isTranscribing ? "Transcribing…" : "Transcribe (temp)")
-                    .font(.system(size: 14, weight: .semibold)).foregroundStyle(WV.teal)
-                    .padding(.horizontal, 16).frame(height: 40)
-                    .background(WV.teal.opacity(0.12), in: Capsule())
-            }
-            .witnessPress()
-            .disabled(transcriber.isTranscribing)
+    // MARK: Review (Speak) — the on-device transcript, editable before saving. This is where data quality is
+    // protected: the user reads/fixes their own words, and only real text is sent to the create call.
+    private var reviewingView: some View {
+        VStack(spacing: 0) {
+            reviewTopBar
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 14) {
+                    field("Title (optional)", text: $title)
+                    field("When was this? (optional)", text: $dateText, hint: "“April 1993”, or “when I was 16.”")
 
-            Text("Engine: \(transcriber.stateDescription)")
-                .font(.system(size: 11)).foregroundStyle(WT.ink.opacity(0.45))
-                .multilineTextAlignment(.center)
+                    if recorder.lastRecordingURL != nil { playbackBar.padding(.vertical, 2) }
 
-            if !transcriber.transcript.isEmpty {
-                ScrollView {
-                    Text(transcriber.transcript)
-                        .font(.system(size: 13)).foregroundStyle(WT.ink.opacity(0.8))
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Text("YOUR WORDS")
+                        .font(.system(size: 11, weight: .semibold)).tracking(1.5).foregroundStyle(WT.ink.opacity(0.4))
+                    transcriptStatusLine
+
+                    ZStack(alignment: .topLeading) {
+                        if reviewText.isEmpty && !transcriber.isTranscribing {
+                            Text("Type what you said…")
+                                .font(.serif(17)).foregroundStyle(WT.ink.opacity(0.35))
+                                .padding(.horizontal, 16).padding(.vertical, 14)
+                        }
+                        TextEditor(text: $reviewText)
+                            .font(.serif(17)).foregroundStyle(WT.ink).tint(WV.teal)
+                            .scrollContentBackground(.hidden)
+                            .frame(minHeight: 220)
+                            .padding(.horizontal, 12).padding(.vertical, 8)
+                    }
+                    .background(Color.white, in: RoundedRectangle(cornerRadius: 16))
+                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(WT.ink.opacity(0.12), lineWidth: 1))
                 }
-                .frame(maxHeight: 120)
-                .padding(10)
-                .background(Color.white, in: RoundedRectangle(cornerRadius: 12))
-                .overlay(RoundedRectangle(cornerRadius: 12).stroke(WT.ink.opacity(0.1), lineWidth: 1))
+                .padding(.horizontal, 24).padding(.top, 12).padding(.bottom, 8)
             }
         }
-        .padding(.top, 10)
+        .safeAreaInset(edge: .bottom) {
+            let empty = reviewText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            Button { submit(text: reviewText, audio: recorder.lastRecordingURL) } label: {
+                Text("Save memory")
+                    .font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
+                    .frame(maxWidth: .infinity).frame(height: 54)
+                    .background(empty ? WV.teal.opacity(0.4) : WV.teal,
+                                in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            }
+            .witnessPress()
+            .disabled(empty)
+            .padding(.horizontal, 24).padding(.bottom, 10)
+        }
+        .onAppear { if let url = recorder.lastRecordingURL { audioPlayer.load(url) } }
+        .onChange(of: transcriber.transcript) { _, newValue in
+            // Auto-fill while recognition is running; once it finishes, stop overwriting so the user can edit.
+            if transcriber.isTranscribing || reviewText.isEmpty { reviewText = newValue }
+        }
+        .onDisappear { audioPlayer.stop() }
+    }
+
+    private var reviewTopBar: some View {
+        ZStack {
+            Text("REVIEW")
+                .font(.system(size: 12, weight: .semibold)).tracking(1.5).foregroundStyle(WV.gold)
+            HStack {
+                Button { backToCompose() } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left").font(.system(size: 15, weight: .semibold))
+                        Text("Re-record").font(.system(size: 15))
+                    }
+                    .foregroundStyle(WV.teal).frame(height: 44)
+                }
+                .witnessPress()
+                Spacer()
+                Button { dismiss() } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 16, weight: .semibold)).foregroundStyle(WT.ink.opacity(0.7))
+                        .frame(width: 44, height: 44).background(Color.white, in: Circle())
+                        .overlay(Circle().stroke(WT.ink.opacity(0.08), lineWidth: 1))
+                }
+                .witnessPress()
+            }
+        }
+        .padding(.horizontal, 16).padding(.top, 8)
+    }
+
+    @ViewBuilder private var transcriptStatusLine: some View {
+        switch transcriber.state {
+        case .running:
+            Text("Transcribing on your device…")
+                .font(.system(size: 12)).foregroundStyle(WT.ink.opacity(0.45))
+        case .denied:
+            Text("Transcription needs Speech access — you can type your memory here instead.")
+                .font(.system(size: 12)).foregroundStyle(WT.ink.opacity(0.45)).fixedSize(horizontal: false, vertical: true)
+        case .unavailable(let reason):
+            Text("Couldn’t transcribe automatically (\(reason)) — type your memory here.")
+                .font(.system(size: 12)).foregroundStyle(WT.ink.opacity(0.45)).fixedSize(horizontal: false, vertical: true)
+        case .noSpeech:
+            Text("Didn’t catch any speech — type your memory here.")
+                .font(.system(size: 12)).foregroundStyle(WT.ink.opacity(0.45))
+        case .idle, .done:
+            EmptyView()
+        }
+    }
+
+    // MARK: Processing — the honest long wait on the blocking create call. No dismiss control (guards
+    // navigation-away / double-submit); rotating copy so it never looks frozen.
+    private var processingView: some View {
+        VStack(spacing: 20) {
+            Spacer()
+            ProgressView().scaleEffect(1.4).tint(WV.teal)
+            Text(saver.processingMessage)
+                .font(.serif(24)).foregroundStyle(WV.teal)
+                .multilineTextAlignment(.center)
+                .contentTransition(.opacity)
+                .animation(.easeInOut(duration: 0.4), value: saver.processingMessage)
+            Text("This can take up to a minute — \(companion) is reading your memory closely. You can keep this open.")
+                .font(.system(size: 14)).foregroundStyle(WT.ink.opacity(0.55))
+                .multilineTextAlignment(.center).lineSpacing(3)
+                .fixedSize(horizontal: false, vertical: true).padding(.horizontal, 40)
+            Spacer(); Spacer()
+        }
+        .padding(.horizontal, 24)
+        .interactiveDismissDisabled(true)
+    }
+
+    // MARK: Failure — friendly retry. The transcript + recording are preserved in state, so nothing is lost.
+    private func failedView(_ message: String) -> some View {
+        VStack(spacing: 18) {
+            Spacer()
+            ZStack {
+                Circle().fill(WV.danger.opacity(0.12))
+                Image(systemName: "exclamationmark.triangle").font(.system(size: 30, weight: .semibold)).foregroundStyle(WV.danger)
+            }
+            .frame(width: 84, height: 84)
+            Text("Couldn’t save yet").font(.serif(26)).foregroundStyle(WT.ink)
+            Text(message)
+                .font(.system(size: 15)).foregroundStyle(WT.ink.opacity(0.6))
+                .multilineTextAlignment(.center).lineSpacing(3)
+                .fixedSize(horizontal: false, vertical: true).padding(.horizontal, 36)
+            if recorder.lastRecordingURL != nil { playbackBar.padding(.top, 6) }
+            Spacer()
+        }
+        .padding(.horizontal, 24)
+        .safeAreaInset(edge: .bottom) {
+            VStack(spacing: 12) {
+                Button { retrySubmit() } label: {
+                    Text("Try again")
+                        .font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
+                        .frame(maxWidth: .infinity).frame(height: 54)
+                        .background(WV.teal, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                }
+                .witnessPress()
+                Button { backFromFailure() } label: {
+                    Text(mode == .speak ? "Back to my words" : "Back to editing")
+                        .font(.system(size: 15, weight: .medium)).foregroundStyle(WV.teal).frame(height: 24)
+                }
+                .witnessPress()
+            }
+            .padding(.horizontal, 24).padding(.bottom, 10)
+        }
+        .onAppear { if let url = recorder.lastRecordingURL { audioPlayer.load(url) } }
+        .onDisappear { audioPlayer.stop() }
     }
 
     // Compact playback for the just-recorded memo (saved state only).
@@ -311,23 +451,74 @@ struct RecordView: View {
         return String(format: "%01d:%02d", s / 60, s % 60)
     }
     private func cancelRecording() { recorder.cancelRecording() }
+    private func beginRecording() {
+        sessionID = UUID().uuidString   // one session_id per captured memory, minted at capture start
+        recorder.startRecording()
+    }
     private func stopRecording() {
-        // Audio file is at recorder.lastRecordingURL; backend owns upload/transcription.
         Haptics.recordStop()
         recorder.stopRecording()
-        // Register the finished recording with the in-session MediaStore the gallery reads,
-        // so it shows in "Recently added" as an audio item (gold waveform tile, distinct from
-        // photo tiles). Reuses MediaStore / CapturedMedia (kind: .audio). In-memory only —
-        // appears this session, not across relaunches (durable storage is backend-era, item 10).
+        // In-session gallery entry (audio tile). In-memory only; the durable copy is the media upload on save.
         if let url = recorder.lastRecordingURL {
             MediaStore.shared.add(CapturedMedia(image: nil, kind: .audio, videoURL: nil,
                                                 fileName: url.lastPathComponent))
+            transcriber.transcribe(url: url)   // on-device transcript for the review screen
         }
-        withAnimation { saved = true }
+        reviewText = ""
+        withAnimation { stage = .reviewing }
     }
-    private func saveMemory() {
-        // Real: POST /api/v1/memories { title?, memory_date?, content: bodyText }
-        withAnimation { saved = true }
+
+    // Type mode → create directly from the typed text (no audio).
+    private func saveMemory() { submit(text: bodyText, audio: nil) }
+
+    /// The single create path: POST /memories (blocking) then best-effort media upload, via the saver VM.
+    /// On success → confirmation + onSaved refresh; on failure → retry screen with text + recording preserved.
+    private func submit(text: String, audio: URL?) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, stage != .processing else { return }
+        if sessionID.isEmpty { sessionID = UUID().uuidString }   // Type mode has no capture-start
+        let memoryDate = Self.strictYMD(dateText)
+        let trimmedTitle = title.trimmingCharacters(in: .whitespaces)
+        let titleOpt = trimmedTitle.isEmpty ? nil : trimmedTitle
+        transcriber.cancel()
+        audioPlayer.stop()
+        withAnimation { stage = .processing }
+        Task {
+            let id = await saver.save(text: trimmed, sessionID: sessionID, title: titleOpt,
+                                      memoryDate: memoryDate, audioURL: audio, auth: auth)
+            if id != nil {
+                onSaved?()
+                withAnimation { stage = .done }
+            } else {
+                withAnimation {
+                    stage = .failed(saver.errorText ?? "We couldn’t save that just now. Your recording is safe — tap to try again.")
+                }
+            }
+        }
+    }
+    private func retrySubmit() {
+        if mode == .speak { submit(text: reviewText, audio: recorder.lastRecordingURL) }
+        else { submit(text: bodyText, audio: nil) }
+    }
+    private func backFromFailure() {
+        audioPlayer.stop()
+        withAnimation { stage = (mode == .speak) ? .reviewing : .compose }
+    }
+    private func backToCompose() {
+        transcriber.cancel()
+        audioPlayer.stop()
+        withAnimation { stage = .compose }
+    }
+
+    /// Only send memory_date when it's a real yyyy-MM-dd; the "When was this?" field is free text (prose like
+    /// "April 1993"), which the backend extracts from the memory text instead.
+    private static func strictYMD(_ s: String) -> String? {
+        let t = s.trimmingCharacters(in: .whitespaces)
+        guard !t.isEmpty else { return nil }
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd"
+        return f.date(from: t) != nil ? t : nil
     }
 
     private var timeString: String {

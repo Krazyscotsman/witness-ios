@@ -58,7 +58,9 @@ struct HomeView: View {
                 }
             }
             .navigationDestination(for: MemoryDTO.self) { m in MemoryDetailView(listItem: m, auth: auth) }
-            .fullScreenCover(isPresented: $showRecord) { RecordView() }
+            .fullScreenCover(isPresented: $showRecord) {
+                RecordView(auth: auth) { Task { await memoriesVM.refresh(auth: auth) } }
+            }
             .task { await vm.load(auth: auth) }
             .task { await memoriesVM.load(auth: auth) }
         }

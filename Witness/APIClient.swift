@@ -122,6 +122,48 @@ final class APIClient {
         return data   // any 2xx = success
     }
 
+    /// POST multipart/form-data with a single file part (e.g. the recorded audio attached to a memory). Any
+    /// 2xx = success; the response body is NOT decoded (the media-attach ack shape isn't depended on). Throws
+    /// APIError on 401 / non-2xx / transport, same as the other methods, so callers can refresh+retry.
+    @discardableResult
+    func postMultipart(_ path: String, fileData: Data, fileName: String, mimeType: String,
+                       fieldName: String = "file", authorized: Bool = true,
+                       timeout: TimeInterval? = nil) async throws -> Data {
+        guard let url = URL(string: path, relativeTo: Self.baseURL) else { throw APIError.invalidURL }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        if let timeout { req.timeoutInterval = timeout }
+        let boundary = "Boundary-\(UUID().uuidString)"
+        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        if authorized, let token = tokenProvider() {
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        var body = Data()
+        func add(_ s: String) { body.append(s.data(using: .utf8)!) }
+        add("--\(boundary)\r\n")
+        add("Content-Disposition: form-data; name=\"\(fieldName)\"; filename=\"\(fileName)\"\r\n")
+        add("Content-Type: \(mimeType)\r\n\r\n")
+        body.append(fileData)
+        add("\r\n--\(boundary)--\r\n")
+        req.httpBody = body
+
+        let data: Data, response: URLResponse
+        do { (data, response) = try await session.data(for: req) }
+        catch { throw APIError.network(error) }
+        guard let http = response as? HTTPURLResponse else {
+            throw APIError.network(URLError(.badServerResponse))
+        }
+        if http.statusCode == 401 {
+            let parsed = try? JSONDecoder().decode(ErrorBody.self, from: data)
+            throw APIError.unauthorized(detail: parsed?.detail, code: parsed?.code)
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw APIError.http(status: http.statusCode, body: String(data: data, encoding: .utf8))
+        }
+        return data   // any 2xx = success
+    }
+
     private func request<Body: Encodable, Response: Decodable>(
         _ path: String, method: String, body: Body?, authorized: Bool, timeout: TimeInterval? = nil,
         decoder: JSONDecoder = JSONDecoder()
@@ -143,28 +185,11 @@ final class APIClient {
 
         let data: Data, response: URLResponse
         do { (data, response) = try await session.data(for: req) }
-        catch {
-            #if DEBUG
-            if url.absoluteString.contains("/jarvis/witness/sessions") {
-                print("🩺[WitnessStart] TRANSPORT error: \(error)  urlCode=\((error as? URLError)?.code.rawValue ?? -1)")
-            }
-            #endif
-            throw APIError.network(error)
-        }
+        catch { throw APIError.network(error) }
 
         guard let http = response as? HTTPURLResponse else {
             throw APIError.network(URLError(.badServerResponse))
         }
-        #if DEBUG
-        if url.absoluteString.contains("/jarvis/witness/sessions") {
-            let raw = String(data: data, encoding: .utf8)?.prefix(600) ?? ""
-            print("🩺[WitnessStart] \(method) \(url.absoluteString) → \(http.statusCode)  bytes=\(data.count)  body=\(raw)")
-        }
-        if url.absoluteString.contains("/api/v1/graph") {
-            let raw = String(data: data, encoding: .utf8)?.prefix(800) ?? ""
-            print("🩺[Graph] \(method) \(url.absoluteString) → \(http.statusCode)  bytes=\(data.count)  body=\(raw)")
-        }
-        #endif
         if http.statusCode == 401 {
             // /auth/login bad-creds carry {detail}; guarded endpoints carry {code}; /auth/me and
             // /auth/refresh are code-less (nil code -> re-login, handled by AuthManager).

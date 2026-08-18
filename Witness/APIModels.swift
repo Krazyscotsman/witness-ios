@@ -48,6 +48,47 @@ struct MemoriesResponse: Decodable {
     let offset: Int
 }
 
+/// POST /api/v1/memories — create a memory from the on-device transcript (Speak) or typed text (Type). The
+/// call BLOCKS on the server extraction pipeline (~30–90s), so callers use a long (~120s) timeout. `title` /
+/// `memory_date` are OMITTED when nil (custom encode with encodeIfPresent); `memory_date` is only ever sent as
+/// strict yyyy-MM-dd (the backend extracts the date from the text otherwise). `session_id` is a client-minted
+/// UUID generated when capture begins. `nonisolated` because it's encoded in a nonisolated context.
+nonisolated struct MemoryCreateRequest: Encodable {
+    let text: String
+    let sessionId: String
+    let title: String?
+    let memoryDate: String?
+
+    enum CodingKeys: String, CodingKey {
+        case text
+        case sessionId = "session_id"
+        case title
+        case memoryDate = "memory_date"
+    }
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(text, forKey: .text)
+        try c.encode(sessionId, forKey: .sessionId)
+        try c.encodeIfPresent(title, forKey: .title)
+        try c.encodeIfPresent(memoryDate, forKey: .memoryDate)
+    }
+}
+
+/// POST /api/v1/memories response: { status, memory_id, resolved_entities, message }. Decoded with the DEFAULT
+/// decoder (APIClient.post), so explicit CodingKeys map memory_id. `resolved_entities` is untyped and
+/// intentionally NOT modeled — a shape change there must never fail the create.
+nonisolated struct MemoryCreateResponse: Decodable {
+    let status: String?
+    let memoryId: String?
+    let message: String?
+
+    enum CodingKeys: String, CodingKey {
+        case status
+        case memoryId = "memory_id"
+        case message
+    }
+}
+
 /// Defensive by design: only `id` is required (primary key / Identifiable). Every other field
 /// is optional so a null/absent value in a future memory degrades gracefully rather than
 /// throwing and making the whole pipe look broken. The three-state `exactDateEstimated` (Bool?)

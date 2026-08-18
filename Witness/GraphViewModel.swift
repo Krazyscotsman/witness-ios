@@ -47,9 +47,6 @@ final class GraphViewModel: ObservableObject {
         } catch SessionError.sessionEnded {
             state = .failed("Your session has ended. Please sign in again.")
         } catch {
-            #if DEBUG
-            print("🩺[Graph] caught: \(error)")
-            #endif
             state = .failed("We couldn’t load your graph. Check your connection and try again.")
         }
     }
