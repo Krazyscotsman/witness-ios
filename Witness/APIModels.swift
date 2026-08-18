@@ -796,3 +796,38 @@ nonisolated struct GraphStats: Decodable {
     let totalEdges: Int?
     let anchorCount: Int?
 }
+
+// MARK: - Learn (POST /api/v1/learn/chat) — whole-life single-shot Q&A with cited sources. Request is just
+// { message } (mode/session_id intentionally omitted — stateless). Decoded by the DEFAULT decoder (APIClient.post),
+// so explicit CodingKeys map the snake_case keys. `sources` is a heterogeneous union branched on `type`.
+nonisolated struct LearnChatRequest: Encodable { let message: String }
+
+nonisolated struct LearnResponse: Decodable {
+    let answer: String?
+    let confidence: Double?
+    let queryType: String?
+    let subject: String?
+    let sources: [LearnSourceDTO]?
+    let mode: String?
+    let processingTimeMs: Double?
+    enum CodingKeys: String, CodingKey {
+        case answer, confidence, subject, sources, mode
+        case queryType = "query_type"
+        case processingTimeMs = "processing_time_ms"
+    }
+}
+
+/// One cited source. UNION branched on `type`: "memory" → id/title/date; "entity" → id/name/entity_type. Every
+/// field optional so a shape wobble on an unused branch never fails the whole answer.
+nonisolated struct LearnSourceDTO: Decodable {
+    let type: String?
+    let id: String?
+    let title: String?
+    let date: String?
+    let name: String?
+    let entityType: String?
+    enum CodingKeys: String, CodingKey {
+        case type, id, title, date, name
+        case entityType = "entity_type"
+    }
+}

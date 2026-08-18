@@ -1,17 +1,14 @@
 import SwiftUI
 
-// MARK: - Learn — "Ask the Pattern Layer". Whole-life Q&A grounded in your memories,
-// with cited sources, confidence, modes, and interpretive lenses.
-//   POST /api/v1/learn/chat { message, mode, session_id } -> { answer, confidence, query_type, sources }
-//   POST /api/v1/tts/generate (Read aloud)
-// Answers are sample here; mapped to the engine for wiring.
+// MARK: - Learn — "Ask the Pattern Layer". Whole-life single-shot Q&A grounded in your memories, with cited
+// sources (memory → tap-through to detail; entity → chip) and optional confidence. Interpretive lenses are
+// preset questions. Wired to POST /api/v1/learn/chat { message } (stateless — no mode, no session_id).
 struct LearnView: View {
     @Environment(\.dismiss) private var dismiss
+    @ObservedObject var auth: AuthManager
+    @StateObject private var vm = LearnViewModel()
 
-    @State private var mode = "jarvis"
     @State private var query = ""
-    @State private var thinking = false
-    @State private var reflections: [LearnReflection] = []
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -20,10 +17,10 @@ struct LearnView: View {
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 18) {
                     headerBlock
-                    modeSelector
                     askBox
-                    if thinking { thinkingCard }
-                    if reflections.isEmpty && !thinking { lensesSection }
+                    if vm.isAsking { thinkingCard }
+                    if case .failed(let msg) = vm.phase { errorCard(msg) }
+                    if vm.reflections.isEmpty && !vm.isAsking { lensesSection }
                     else { reflectionsSection }
                 }
                 .padding(.horizontal, 24).padding(.top, 60).padding(.bottom, 120)
@@ -40,8 +37,8 @@ struct LearnView: View {
                     .foregroundStyle(WV.teal).frame(height: 44)
             }.witnessPress()
             Spacer()
-            if !reflections.isEmpty {
-                Button { withAnimation { reflections.removeAll() } } label: {
+            if !vm.reflections.isEmpty {
+                Button { withAnimation { vm.clear() } } label: {
                     Text("Clear").font(.system(size: 15, weight: .medium)).foregroundStyle(WT.ink.opacity(0.55)).frame(height: 44)
                 }.witnessPress()
             }
@@ -58,28 +55,6 @@ struct LearnView: View {
         }
     }
 
-    private var modeSelector: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(LearnModeOption.all) { m in
-                        let sel = mode == m.id
-                        Text(m.label)
-                            .font(.system(size: 14, weight: sel ? .semibold : .regular))
-                            .foregroundStyle(sel ? .white : WT.ink.opacity(0.6))
-                            .padding(.horizontal, 14).frame(height: 36)
-                            .background(sel ? WV.teal : Color.white, in: Capsule())
-                            .overlay(Capsule().stroke(sel ? Color.clear : WT.ink.opacity(0.1), lineWidth: 1))
-                            .onTapGesture { withAnimation(.easeOut(duration: 0.15)) { mode = m.id } }
-                    }
-                }
-            }
-            if let m = LearnModeOption.all.first(where: { $0.id == mode }) {
-                Text(m.desc).font(.system(size: 12)).foregroundStyle(WT.ink.opacity(0.5)).fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
-
     private var askBox: some View {
         HStack(spacing: 10) {
             TextField("Ask the Pattern Layer…", text: $query, axis: .vertical)
@@ -87,14 +62,14 @@ struct LearnView: View {
                 .padding(.horizontal, 14).padding(.vertical, 12)
                 .background(Color.white, in: RoundedRectangle(cornerRadius: 16))
                 .overlay(RoundedRectangle(cornerRadius: 16).stroke(WT.ink.opacity(0.12), lineWidth: 1))
-            Button { ask(query) } label: {
+            Button { submit(query) } label: {
                 ZStack { Circle().fill(canAsk ? WV.teal : WV.teal.opacity(0.4)); Image(systemName: "arrow.up").font(.system(size: 18, weight: .semibold)).foregroundStyle(.white) }
                     .frame(width: 50, height: 50)
             }
             .witnessPress().disabled(!canAsk)
         }
     }
-    private var canAsk: Bool { !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !thinking }
+    private var canAsk: Bool { !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !vm.isAsking }
 
     private var thinkingCard: some View {
         HStack(spacing: 10) {
@@ -112,7 +87,7 @@ struct LearnView: View {
             Text("INTERPRETIVE PATHS").font(.system(size: 12, weight: .semibold)).tracking(1.3).foregroundStyle(WT.ink.opacity(0.45))
             Text("Tap a path to ask, or write your own question above.").font(.system(size: 13)).foregroundStyle(WT.ink.opacity(0.5))
             ForEach(InsightLens.all) { lens in
-                Button { ask(lens.question) } label: {
+                Button { submit(lens.question) } label: {
                     HStack(spacing: 12) {
                         ZStack { Circle().fill(lens.tone.opacity(0.12)); Image(systemName: "arrow.triangle.branch").font(.system(size: 15, weight: .medium)).foregroundStyle(lens.tone) }
                             .frame(width: 42, height: 42)
@@ -136,10 +111,10 @@ struct LearnView: View {
     // MARK: Reflections (answers)
     private var reflectionsSection: some View {
         VStack(alignment: .leading, spacing: 14) {
-            if reflections.count > 1 {
+            if vm.reflections.count > 1 {
                 Text("PREVIOUS REFLECTIONS").font(.system(size: 12, weight: .semibold)).tracking(1.3).foregroundStyle(WT.ink.opacity(0.45))
             }
-            ForEach(reflections) { r in reflectionCard(r) }
+            ForEach(vm.reflections) { r in reflectionCard(r) }
         }
     }
 
@@ -149,18 +124,12 @@ struct LearnView: View {
             HStack(spacing: 10) {
                 Text("Pattern finding across memory").font(.system(size: 11, weight: .medium)).foregroundStyle(WV.gold)
                     .padding(.horizontal, 8).padding(.vertical, 4).background(WV.gold.opacity(0.12), in: Capsule())
-                confidenceMeter(r.confidence)
+                if let c = r.confidence { confidenceMeter(c) }
             }
             Text(r.answer).font(.serif(16)).foregroundStyle(WT.ink.opacity(0.9)).lineSpacing(5).fixedSize(horizontal: false, vertical: true)
 
-            if !r.memorySources.isEmpty { sourceGroup("Referenced memories", r.memorySources, icon: "book.closed") }
-            if !r.entitySources.isEmpty { sourceGroup("Referenced people and entities", r.entitySources, icon: "person") }
-
-            Button { /* TODO: POST /api/v1/tts/generate { text: answer } */ } label: {
-                HStack(spacing: 6) { Image(systemName: "speaker.wave.2.fill").font(.system(size: 13)); Text("Read").font(.system(size: 14, weight: .medium)) }
-                    .foregroundStyle(WV.teal)
-            }
-            .witnessPress().padding(.top, 2)
+            if !r.memorySources.isEmpty { memorySourceGroup(r.memorySources) }
+            if !r.entitySources.isEmpty { entitySourceGroup(r.entitySources) }
         }
         .padding(18).frame(maxWidth: .infinity, alignment: .leading)
         .background(WV.card, in: RoundedRectangle(cornerRadius: 20))
@@ -182,47 +151,66 @@ struct LearnView: View {
         }
     }
 
-    private func sourceGroup(_ title: String, _ sources: [LearnSource], icon: String) -> some View {
+    // Memory sources are tappable → real MemoryDetailView (same pattern as Timeline); disabled if id is missing.
+    private func memorySourceGroup(_ sources: [LearnSource]) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(title.uppercased()).font(.system(size: 10, weight: .semibold)).tracking(1).foregroundStyle(WT.ink.opacity(0.4))
+            Text("REFERENCED MEMORIES").font(.system(size: 10, weight: .semibold)).tracking(1).foregroundStyle(WT.ink.opacity(0.4))
+            FlowWrap(sources) { s in
+                NavigationLink {
+                    MemoryDetailView(listItem: MemoryDTO(id: s.memoryId ?? "", title: s.memoryTitle, exactDate: s.memoryDate), auth: auth)
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "book.closed").font(.system(size: 10)).foregroundStyle(WV.teal)
+                        Text(s.label).font(.system(size: 12, weight: .medium)).foregroundStyle(WT.ink.opacity(0.75)).lineLimit(1)
+                        Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold)).foregroundStyle(WT.ink.opacity(0.3))
+                    }
+                    .padding(.horizontal, 10).padding(.vertical, 6).background(WV.teal.opacity(0.08), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled((s.memoryId ?? "").isEmpty)
+            }
+        }
+    }
+
+    // Entity sources are plain chips (name + type) — not tappable.
+    private func entitySourceGroup(_ sources: [LearnSource]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("REFERENCED PEOPLE AND ENTITIES").font(.system(size: 10, weight: .semibold)).tracking(1).foregroundStyle(WT.ink.opacity(0.4))
             FlowWrap(sources) { s in
                 HStack(spacing: 5) {
-                    Image(systemName: icon).font(.system(size: 10)).foregroundStyle(WV.teal)
-                    Text(s.label).font(.system(size: 12, weight: .medium)).foregroundStyle(WT.ink.opacity(0.75))
+                    Image(systemName: "person").font(.system(size: 10)).foregroundStyle(WV.teal)
+                    Text(s.label).font(.system(size: 12, weight: .medium)).foregroundStyle(WT.ink.opacity(0.75)).lineLimit(1)
                 }
                 .padding(.horizontal, 10).padding(.vertical, 6).background(WV.teal.opacity(0.08), in: Capsule())
             }
         }
     }
 
-    // MARK: Ask (sample reflection)
-    private func ask(_ text: String) {
+    // Soft, retryable failure — re-asks the preserved question (401 → refresh handled in the VM).
+    private func errorCard(_ message: String) -> some View {
+        Button { Task { await vm.retry(auth: auth) } } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.clockwise").font(.system(size: 13, weight: .semibold))
+                Text(message).font(.system(size: 14, weight: .medium))
+            }
+            .foregroundStyle(WV.danger)
+            .padding(14).frame(maxWidth: .infinity, alignment: .leading)
+            .background(WV.card, in: RoundedRectangle(cornerRadius: 16))
+            .overlay(RoundedRectangle(cornerRadius: 16).stroke(WV.danger.opacity(0.2), lineWidth: 1))
+        }
+        .witnessPress()
+    }
+
+    // MARK: Ask — single-shot POST /api/v1/learn/chat via the VM.
+    private func submit(_ text: String) {
         let q = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return }
         query = ""; focused = false
-        withAnimation { thinking = true }
-        // Real: POST /api/v1/learn/chat { message: q, mode } -> answer, confidence, query_type, sources
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
-            withAnimation {
-                thinking = false
-                reflections.insert(LearnReflection.sample(question: q), at: 0)
-            }
-        }
+        Task { await vm.ask(q, auth: auth) }
     }
 }
 
 // MARK: - Models
-struct LearnModeOption: Identifiable {
-    let id: String; let label: String; let desc: String
-    static let all: [LearnModeOption] = [
-        .init(id: "jarvis", label: "Grounded", desc: "Answers plainly from your memories — the default, conversational voice."),
-        .init(id: "commercial", label: "Accessible", desc: "Broad, reader-friendly framing, as if for a wider audience."),
-        .init(id: "storyteller", label: "Storyteller", desc: "Told as story — vivid, warm, scene by scene."),
-        .init(id: "analytical", label: "Analytical", desc: "Structured patterns, evidence, and reasoning."),
-        .init(id: "devil_advocate", label: "Challenger", desc: "Pushes back and tests what you might be avoiding."),
-    ]
-}
-
 struct InsightLens: Identifiable {
     let id = UUID()
     let title: String; let desc: String; let question: String; let tone: Color
@@ -251,31 +239,19 @@ struct LearnSource: Identifiable {
     enum Kind { case memory, entity }
     let kind: Kind
     let label: String
+    let memoryId: String?      // memory tap-through payload (nil for entity)
+    let memoryTitle: String?
+    let memoryDate: String?
 }
 
 struct LearnReflection: Identifiable {
     let id = UUID()
     let question: String
     let answer: String
-    let confidence: Double
+    let confidence: Double?     // nil → no meter (no fabricated confidence)
     let sources: [LearnSource]
     var memorySources: [LearnSource] { sources.filter { $0.kind == .memory } }
     var entitySources: [LearnSource] { sources.filter { $0.kind == .entity } }
-
-    static func sample(question: String) -> LearnReflection {
-        LearnReflection(
-            question: question,
-            answer: "This is a sample reflection, shown so you can see how an answer reads — grounded in your memories, with its sources named below. Once connected, this draws across your whole life story to answer in your chosen voice, citing the specific memories and people it reasoned from. Your real reflections will replace this text.",
-            confidence: 0.82,
-            sources: [
-                .init(kind: .memory, label: "A big move · 2005"),
-                .init(kind: .memory, label: "Graduation · 1992"),
-                .init(kind: .memory, label: "A new chapter · 2012"),
-                .init(kind: .entity, label: "A mentor"),
-                .init(kind: .entity, label: "Family"),
-            ]
-        )
-    }
 }
 
 // MARK: - Simple wrapping layout for source chips
