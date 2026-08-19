@@ -852,3 +852,79 @@ nonisolated struct LearnSourceDTO: Decodable {
         case entityType = "entity_type"
     }
 }
+
+// MARK: - Memoir (config → optional atmosphere interview → generate → PDF)
+
+/// POST /memoir/generate (ROOT). start_year/end_year/dedication omitted when nil. Response decoded by the
+/// DEFAULT decoder → CodingKeys map snake_case. `nonisolated`: encoded/decoded off-main.
+nonisolated struct MemoirGenerateRequest: Encodable {
+    let title: String
+    let style: String
+    let tone: String
+    let wordTarget: Int
+    let includeImages: Bool
+    let startYear: Int?
+    let endYear: Int?
+    let dedication: String?
+    enum CodingKeys: String, CodingKey {
+        case title, style, tone, dedication
+        case wordTarget = "word_target", includeImages = "include_images"
+        case startYear = "start_year", endYear = "end_year"
+    }
+    func encode(to e: Encoder) throws {
+        var c = e.container(keyedBy: CodingKeys.self)
+        try c.encode(title, forKey: .title); try c.encode(style, forKey: .style); try c.encode(tone, forKey: .tone)
+        try c.encode(wordTarget, forKey: .wordTarget); try c.encode(includeImages, forKey: .includeImages)
+        try c.encodeIfPresent(startYear, forKey: .startYear); try c.encodeIfPresent(endYear, forKey: .endYear)
+        try c.encodeIfPresent(dedication, forKey: .dedication)
+    }
+}
+
+/// Generate result. ⚠️ Failure can arrive as HTTP 200 with {status:"error", message}. Read `status` from body.
+nonisolated struct MemoirGenerateResponse: Decodable {
+    let status: String?
+    let message: String?
+    let pdfUrl: String?
+    let downloadUrl: String?
+    let chapterCount: Int?
+    let wordCount: Int?
+    let memoriesUsed: Int?
+    enum CodingKeys: String, CodingKey {
+        case status, message
+        case pdfUrl = "pdf_url", downloadUrl = "download_url"
+        case chapterCount = "chapter_count", wordCount = "word_count", memoriesUsed = "memories_used"
+    }
+}
+
+/// GET /api/v1/memoir/atmosphere-prompts (decoded with the snake decoder → camelCase, no CodingKeys).
+nonisolated struct MemoirAtmospherePromptsResponse: Decodable { let periods: [MemoirPeriodDTO]? }
+nonisolated struct MemoirPeriodDTO: Decodable, Identifiable {
+    var id: String { "\(lifePeriod ?? "")|\(yearStart ?? 0)|\(yearEnd ?? 0)" }
+    let lifePeriod: String?
+    let location: String?
+    let yearStart: Int?
+    let yearEnd: Int?
+    let hasAtmosphereData: Bool?
+    let prompts: [MemoirPromptDTO]?
+}
+nonisolated struct MemoirPromptDTO: Decodable, Identifiable {
+    var id: String { "\(promptCategory ?? "")|\(promptText ?? "")" }
+    let promptCategory: String?
+    let promptText: String?
+}
+
+/// POST /api/v1/memoir/atmosphere (one per non-empty answer). Default encoder → CodingKeys map snake_case.
+nonisolated struct MemoirAtmosphereRequest: Encodable {
+    let lifePeriod: String
+    let location: String
+    let yearStart: Int?
+    let yearEnd: Int?
+    let promptCategory: String
+    let promptText: String
+    let responseText: String
+    enum CodingKeys: String, CodingKey {
+        case location
+        case lifePeriod = "life_period", yearStart = "year_start", yearEnd = "year_end"
+        case promptCategory = "prompt_category", promptText = "prompt_text", responseText = "response_text"
+    }
+}

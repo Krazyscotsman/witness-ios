@@ -30,7 +30,7 @@ struct InsightsView: View {
                 switch item.id {
                 case "anchors":  AnchorRegistryView(auth: auth)
                 case "timeline": TimelineView(auth: auth)
-                case "memoir":   MemoirView()
+                case "memoir":   MemoirView(auth: auth)
                 case "learn":    LearnView(auth: auth)
                 case "explain":  ExplainView(auth: auth)
                 case "graph":    GraphView(auth: auth)

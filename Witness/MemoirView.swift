@@ -4,15 +4,18 @@ import SwiftUI
 // POST /memoir/preview (estimate) and POST /memoir/generate (the book).
 // Personal atmosphere prompts (the Hope update) enrich quality before generation.
 struct MemoirView: View {
+    @ObservedObject var auth: AuthManager
     @Environment(\.dismiss) private var dismiss
+    @StateObject private var vm = MemoirViewModel()
+    @StateObject private var atmosphereVM = MemoirAtmosphereViewModel()
 
-    @State private var title = ""
+    @State private var title = "My Life Story"
     @State private var words = 70000
     @State private var style = "narrative"
     @State private var tone = "warm"
     @State private var startYear = ""
     @State private var endYear = ""
-    @State private var includeImages = false
+    @State private var includeImages = true
     @State private var enrichWithAtmosphere = true
     @State private var dedication = ""
 
@@ -20,9 +23,8 @@ struct MemoirView: View {
     @State private var showYearPicker = false
     @State private var yearTarget: YearTarget = .start
     @State private var pickerYear = Calendar.current.component(.year, from: Date()) - 30
+    @State private var preparingInterview = false
 
-    @State private var phase: Phase = .config
-    enum Phase { case config, generating, ready }
     enum YearTarget { case start, end }
 
     private let years = Array(1900...Calendar.current.component(.year, from: Date()))
@@ -32,10 +34,11 @@ struct MemoirView: View {
             ParchmentBackground()
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 20) {
-                    switch phase {
-                    case .config:     configBody
-                    case .generating: generatingBody
-                    case .ready:      readyBody
+                    switch vm.phase {
+                    case .config:            configBody
+                    case .generating:        generatingBody
+                    case .ready:             readyBody
+                    case .failed(let msg):   failedBody(msg)
                     }
                 }
                 .padding(.horizontal, 24).padding(.top, 60).padding(.bottom, 120)
@@ -45,7 +48,8 @@ struct MemoirView: View {
         .navigationBarBackButtonHidden(true).toolbar(.hidden, for: .navigationBar)
         .fullScreenCover(isPresented: $showAtmosphere) {
             AtmosphereModal(
-                onComplete: { showAtmosphere = false; runGenerate() },
+                vm: atmosphereVM, auth: auth,
+                onComplete: { showAtmosphere = false; Task { await runGenerate() } },
                 onCancel: { showAtmosphere = false }
             )
         }
@@ -57,7 +61,10 @@ struct MemoirView: View {
             Button { dismiss() } label: {
                 HStack(spacing: 4) { Image(systemName: "chevron.left").font(.system(size: 16, weight: .semibold)); Text("Insights").font(.system(size: 16)) }
                     .foregroundStyle(WV.teal).frame(height: 44)
-            }.witnessPress()
+            }
+            .witnessPress()
+            .disabled(vm.phase == .generating)                 // guard nav during the long generate
+            .opacity(vm.phase == .generating ? 0.4 : 1)
             Spacer()
         }
         .padding(.horizontal, 16).background(WV.parchment.opacity(0.96))
@@ -126,13 +133,17 @@ struct MemoirView: View {
             previewCard
 
             Button { startGenerate() } label: {
-                Text("Generate memoir")
-                    .font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
-                    .frame(maxWidth: .infinity).frame(height: 56)
-                    .background(WV.teal, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                    .shadow(color: WV.teal.opacity(0.3), radius: 10, y: 6)
+                HStack(spacing: 8) {
+                    if preparingInterview { ProgressView().tint(.white) }
+                    Text(preparingInterview ? "Preparing…" : "Generate memoir")
+                        .font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
+                }
+                .frame(maxWidth: .infinity).frame(height: 56)
+                .background(WV.teal, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .shadow(color: WV.teal.opacity(0.3), radius: 10, y: 6)
             }
             .witnessPress()
+            .disabled(preparingInterview)
         }
     }
 
@@ -292,28 +303,76 @@ struct MemoirView: View {
 
     private var readyBody: some View {
         VStack(spacing: 18) {
-            Spacer(minLength: 40)
-            ZStack { Circle().fill(WV.teal.opacity(0.12)); Image(systemName: "book.fill").font(.system(size: 34)).foregroundStyle(WV.teal) }
-                .frame(width: 90, height: 90)
-            Text("Ready").font(.serif(30)).foregroundStyle(WV.teal)
-            Text(title.isEmpty ? "Your memoir" : title).font(.serif(20)).foregroundStyle(WT.ink).multilineTextAlignment(.center)
-            HStack(spacing: 0) {
-                previewStat("\(words / 1000)k", "Words")
-                Divider().frame(height: 34)
-                previewStat("~\(estChapters)", "Chapters")
-            }
-            .padding(16).background(WV.teal.opacity(0.06), in: RoundedRectangle(cornerRadius: 16)).padding(.horizontal, 30)
-            VStack(spacing: 10) {
-                Button { /* TODO: download PDF from result.download_url */ } label: {
-                    HStack { Image(systemName: "arrow.down.doc"); Text("Download PDF") }
-                        .font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
-                        .frame(maxWidth: .infinity).frame(height: 54).background(WV.teal, in: RoundedRectangle(cornerRadius: 16))
+            ZStack { Circle().fill(WV.teal.opacity(0.12)); Image(systemName: "book.fill").font(.system(size: 30)).foregroundStyle(WV.teal) }
+                .frame(width: 80, height: 80)
+            Text("Your memoir is ready").font(.serif(28)).foregroundStyle(WV.teal)
+            Text(title.trimmingCharacters(in: .whitespaces).isEmpty ? "My Life Story" : title)
+                .font(.serif(19)).foregroundStyle(WT.ink).multilineTextAlignment(.center)
+
+            statsRow
+
+            Group {
+                if let url = vm.localPDFURL {
+                    PDFKitView(fileURL: url)
+                        .frame(height: 420)
+                        .clipShape(RoundedRectangle(cornerRadius: 16))
+                        .overlay(RoundedRectangle(cornerRadius: 16).stroke(WT.ink.opacity(0.1), lineWidth: 1))
+                } else {
+                    VStack(spacing: 10) {
+                        ProgressView().tint(WV.teal)
+                        Text("Preparing your PDF…").font(.system(size: 13)).foregroundStyle(WT.ink.opacity(0.55))
+                    }
+                    .frame(height: 200).frame(maxWidth: .infinity)
                 }
-                .witnessPress()
-                Button { withAnimation { phase = .config } } label: {
+            }
+
+            VStack(spacing: 10) {
+                if let url = vm.localPDFURL {
+                    ShareLink(item: url) {
+                        HStack { Image(systemName: "square.and.arrow.up"); Text("Download / Share PDF") }
+                            .font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
+                            .frame(maxWidth: .infinity).frame(height: 54)
+                            .background(WV.teal, in: RoundedRectangle(cornerRadius: 16))
+                    }
+                    .witnessPress()
+                }
+                Button { vm.reset() } label: {
                     Text("Create another memoir").font(.system(size: 15, weight: .medium)).foregroundStyle(WV.teal)
                 }
                 .witnessPress()
+            }
+            .padding(.top, 4)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var statsRow: some View {
+        HStack(spacing: 0) {
+            previewStat(vm.result?.words.map { "\($0 / 1000)k" } ?? "—", "Words")
+            Divider().frame(height: 34)
+            previewStat(vm.result?.chapters.map(String.init) ?? "—", "Chapters")
+            Divider().frame(height: 34)
+            previewStat(vm.result?.memories.map(String.init) ?? "—", "Memories")
+        }
+        .padding(16).background(WV.teal.opacity(0.06), in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private func failedBody(_ message: String) -> some View {
+        VStack(spacing: 16) {
+            Spacer(minLength: 40)
+            ZStack { Circle().fill(WV.danger.opacity(0.12)); Image(systemName: "exclamationmark.triangle").font(.system(size: 30)).foregroundStyle(WV.danger) }
+                .frame(width: 84, height: 84)
+            Text("Couldn’t finish your memoir").font(.serif(24)).foregroundStyle(WT.ink)
+            Text(message).font(.system(size: 15)).foregroundStyle(WT.ink.opacity(0.6)).multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true).padding(.horizontal, 30)
+            VStack(spacing: 10) {
+                Button { Task { await runGenerate() } } label: {
+                    Text("Try again").font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
+                        .frame(maxWidth: .infinity).frame(height: 54).background(WV.teal, in: RoundedRectangle(cornerRadius: 16))
+                }.witnessPress()
+                Button { vm.reset() } label: {
+                    Text("Back to settings").font(.system(size: 15, weight: .medium)).foregroundStyle(WV.teal)
+                }.witnessPress()
             }
             .padding(.horizontal, 30).padding(.top, 4)
             Spacer()
@@ -337,13 +396,29 @@ struct MemoirView: View {
     }
 
     private func startGenerate() {
-        if enrichWithAtmosphere { showAtmosphere = true } else { runGenerate() }
+        guard !preparingInterview, vm.phase != .generating else { return }
+        if enrichWithAtmosphere {
+            preparingInterview = true
+            Task {
+                await atmosphereVM.load(auth: auth)
+                preparingInterview = false
+                if atmosphereVM.periods.isEmpty { await runGenerate() } else { showAtmosphere = true }
+            }
+        } else {
+            Task { await runGenerate() }
+        }
     }
-    private func runGenerate() {
-        // Real: POST /memoir/generate { title, style, tone, word_target: words,
-        //   start_year, end_year, include_images, dedication } (+ atmosphere already saved)
-        withAnimation { phase = .generating }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) { withAnimation { phase = .ready } }
+    private func runGenerate() async {
+        await vm.generate(currentConfig, auth: auth)
+        if vm.phase == .ready { await vm.preparePDF(auth: auth) }
+    }
+    private var currentConfig: MemoirConfig {
+        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let d = dedication.trimmingCharacters(in: .whitespacesAndNewlines)
+        return MemoirConfig(title: t.isEmpty ? "My Life Story" : t, style: style, tone: tone,
+                            wordTarget: words, includeImages: includeImages,
+                            startYear: Int(startYear), endYear: Int(endYear),
+                            dedication: d.isEmpty ? nil : d)
     }
 }
 
@@ -352,12 +427,10 @@ struct WordTarget: Identifiable {
     let value: Int; let label: String; let detail: String; let needsBackend: Bool
     var id: Int { value }
     static let all: [WordTarget] = [
-        .init(value: 3000,   label: "Short",    detail: "A focused keepsake essay", needsBackend: false),
-        .init(value: 10000,  label: "Standard", detail: "A concise personal book", needsBackend: false),
-        .init(value: 20000,  label: "Medium",   detail: "A fuller memoir draft", needsBackend: false),
-        .init(value: 40000,  label: "Long",     detail: "A serious manuscript", needsBackend: false),
-        .init(value: 70000,  label: "Book",     detail: "Full book-length memoir", needsBackend: false),
-        .init(value: 150000, label: "Epic",     detail: "A complete life story", needsBackend: true),
+        .init(value: 3000,  label: "Short",  detail: "A focused keepsake essay", needsBackend: false),
+        .init(value: 20000, label: "Medium", detail: "A fuller memoir draft", needsBackend: false),
+        .init(value: 40000, label: "Long",   detail: "A serious manuscript", needsBackend: false),
+        .init(value: 70000, label: "Book",   detail: "Full book-length memoir", needsBackend: false),
     ]
 }
 
