@@ -111,23 +111,45 @@ final class EntityDetailViewModel: ObservableObject {
         return m
     }
 
-    /// attributes.people_details_by_memory → per-memory cards. Dict (keyed by memory_id, ordered by
-    /// linked_memories) OR array (order preserved). Defensive: unknown shape → [].
-    var peopleDetails: [PersonMemoryDetail] {
-        guard let pd = detail?.attributes?["people_details_by_memory"] else { return [] }
-        if let dict = pd.objectValue {
+    /// attributes[key] → memory-scoped records. Dict (keyed by memory_id, ordered by linked_memories) OR array
+    /// (order preserved). Defensive: unknown shape → []. Shared by people / arcs / romantic (and Phase 5).
+    private func records(_ key: String) -> [PersonMemoryDetail] {
+        guard let v = detail?.attributes?[key] else { return [] }
+        if let dict = v.objectValue {
             let order = Dictionary(linkedMemories.enumerated().compactMap { (i, lm) in lm.id.map { ($0, i) } },
                                    uniquingKeysWith: { a, _ in a })
             return dict.map { PersonMemoryDetail(memoryId: $0.key, obj: $0.value.objectValue ?? [:]) }
                 .sorted { (order[$0.memoryId ?? ""] ?? Int.max) < (order[$1.memoryId ?? ""] ?? Int.max) }
         }
-        if let arr = pd.arrayValue {
+        if let arr = v.arrayValue {
             return arr.compactMap { el in
                 guard let o = el.objectValue else { return nil }
                 return PersonMemoryDetail(memoryId: o["memory_id"]?.stringValue, obj: o)
             }
         }
         return []
+    }
+    var peopleDetails: [PersonMemoryDetail]    { records("people_details_by_memory") }
+    var relationshipArcs: [PersonMemoryDetail] { records("relationship_arcs_by_memory") }
+    var romanticDynamics: [PersonMemoryDetail] { records("romantic_dynamics") }
+
+    private func sigRank(_ s: String?) -> Int {
+        switch (s ?? "").lowercased() {
+        case "critical", "defining": return 4
+        case "high", "major":        return 3
+        case "medium", "moderate":   return 2
+        case "low", "minor":         return 1
+        default:                     return 0
+        }
+    }
+    /// Highest-significance arc (first of the max) — source for the deferred arc hero cards.
+    var heroArc: PersonMemoryDetail? {
+        var best: PersonMemoryDetail?; var bestRank = Int.min
+        for a in relationshipArcs {
+            let r = sigRank(a.obj["significance"]?.displayString)
+            if r > bestRank { bestRank = r; best = a }
+        }
+        return best
     }
 
     private func firstDetailString(_ key: String) -> String? {
@@ -189,6 +211,8 @@ struct EntityDetailPage: View {
                         summaryCards
                         dialogueSection
                         acrossMemoriesSection
+                        relationshipEvolutionSection
+                        romanticDynamicsSection
                         linkedMemoriesSection
                     }
                 }
@@ -255,16 +279,28 @@ struct EntityDetailPage: View {
 
     // MARK: Hero cards (best pick — not definitive) + Across memories
 
+    // Built imperatively (not in a ViewBuilder): Appearance + quote (Phase 3) + arc heroes (deferred).
+    private var heroList: [EDHero] {
+        var heroes: [EDHero] = []
+        if let a = vm.heroAppearance { heroes.append(EDHero(title: "Appearance", body: a.text, memoryId: a.memoryId)) }
+        if let q = vm.heroQuote { heroes.append(EDHero(title: "In their words", body: "“\(q.text)”", memoryId: q.memoryId, quoted: true)) }
+        if let arc = vm.heroArc {
+            let m = arc.memoryId
+            if let v = arc.obj["arc_summary"]?.displayString { heroes.append(EDHero(title: "Relationship arc", body: v, memoryId: m)) }
+            if let v = arc.obj["what_they_meant_to_me"]?.displayString { heroes.append(EDHero(title: "What they meant to me", body: v, memoryId: m)) }
+            if let v = arc.obj["what_i_meant_to_them"]?.displayString { heroes.append(EDHero(title: "What I meant to them", body: v, memoryId: m)) }
+            if let v = arc.obj["life_impact_summary"]?.displayString { heroes.append(EDHero(title: "Life impact", body: v, memoryId: m)) }
+        }
+        return heroes
+    }
     @ViewBuilder private var heroCards: some View {
-        let appear = vm.heroAppearance
-        let quote = vm.heroQuote
-        if appear != nil || quote != nil {
+        let heroes = heroList
+        if !heroes.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 Text("BEST PICK — NOT DEFINITIVE").font(.system(size: 10, weight: .semibold)).tracking(1.2).foregroundStyle(WT.ink.opacity(0.4))
                 let cols = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
                 LazyVGrid(columns: cols, alignment: .leading, spacing: 12) {
-                    if let a = appear { heroCard(title: "Appearance", body: a.text, memoryId: a.memoryId, quoted: false) }
-                    if let q = quote { heroCard(title: "In their words", body: "“\(q.text)”", memoryId: q.memoryId, quoted: true) }
+                    ForEach(heroes) { h in heroCard(title: h.title, body: h.body, memoryId: h.memoryId, quoted: h.quoted) }
                 }
             }
         }
@@ -345,6 +381,133 @@ struct EntityDetailPage: View {
         if let o = v?.objectValue, !o.isEmpty {
             ForEach(o.keys.sorted(), id: \.self) { k in detailField(humanize(k), o[k]) }
         }
+    }
+
+    // MARK: Relationship evolution (relationship_arcs_by_memory) — collapsed.
+    @ViewBuilder private var relationshipEvolutionSection: some View {
+        let arcs = vm.relationshipArcs
+        if !arcs.isEmpty {
+            EDSection("Relationship evolution", count: arcs.count, defaultExpanded: false) {
+                VStack(spacing: 12) { ForEach(arcs) { arcCard($0) } }
+            }
+        }
+    }
+    private func arcCard(_ a: PersonMemoryDetail) -> some View {
+        let title = a.memoryId.flatMap { vm.memoryTitles[$0] }
+        return VStack(alignment: .leading, spacing: 8) {
+            FlowLayout(spacing: 8, lineSpacing: 8) {
+                if let t = firstStr(a.obj, "arc_type", "type") { EDPill(text: humanize(t)) }
+                if let st = firstStr(a.obj, "arc_subtype", "subtype") { EDPill(text: humanize(st)) }
+                if let s = a.obj["significance"]?.displayString { EDPill(text: s.capitalized, icon: "star", tone: WV.gold) }
+                if let title { EDPill(text: title, icon: "book.closed") }
+            }
+            VStack(alignment: .leading, spacing: 0) {
+                detailField("Summary", a.obj["arc_summary"])
+                detailField("Description", a.obj["arc_description"])
+                detailField("Started", a.obj["start_date"])
+                detailField("Ongoing", a.obj["is_ongoing"])
+                detailField("What they meant to me", a.obj["what_they_meant_to_me"])
+                detailField("What I meant to them", a.obj["what_i_meant_to_them"])
+                detailField("Life impact", a.obj["life_impact_summary"])
+            }
+            arcPhases(a.obj["phases"])
+            arcMilestones(a.obj["milestones"])
+        }
+        .padding(14).frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(hex: 0xfaf7f0), in: RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(WT.ink.opacity(0.07), lineWidth: 1))
+    }
+    @ViewBuilder private func arcPhases(_ v: JSONValue?) -> some View {
+        if let arr = v?.arrayValue, !arr.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("PHASES").font(.system(size: 11, weight: .semibold)).tracking(1.2).foregroundStyle(WT.ink.opacity(0.4)).padding(.top, 4)
+                ForEach(Array(arr.enumerated()), id: \.offset) { _, el in
+                    if let o = el.objectValue {
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(spacing: 8) {
+                                if let t = o["phase_type"]?.displayString { EDPill(text: humanize(t)) }
+                                if let e = o["primary_emotion"]?.displayString { EDPill(text: e.capitalized, icon: "heart", tone: WV.gold) }
+                            }
+                            if let d = o["emotional_description"]?.displayString {
+                                Text(d).font(.system(size: 14)).foregroundStyle(WT.ink.opacity(0.75)).fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    @ViewBuilder private func arcMilestones(_ v: JSONValue?) -> some View {
+        if let arr = v?.arrayValue {
+            let labels = arr.compactMap { el -> String? in
+                guard let o = el.objectValue else { return nil }
+                return o["milestone_label"]?.displayString ?? o["milestone_type"]?.displayString ?? o["description"]?.displayString
+            }
+            if !labels.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("MILESTONES").font(.system(size: 11, weight: .semibold)).tracking(1.2).foregroundStyle(WT.ink.opacity(0.4)).padding(.top, 4)
+                    EDPillWrap(values: labels)
+                }
+            }
+        }
+    }
+
+    // MARK: Romantic dynamics (romantic_dynamics) — collapsed.
+    @ViewBuilder private var romanticDynamicsSection: some View {
+        let rows = vm.romanticDynamics
+        if !rows.isEmpty {
+            EDSection("Romantic dynamics", count: rows.count, defaultExpanded: false) {
+                VStack(spacing: 12) { ForEach(rows) { romanticCard($0) } }
+            }
+        }
+    }
+    private static let romanticKnown: [(String, String)] = [
+        ("relationship_stage", "Relationship stage"),
+        ("emotional_intimacy_level", "Emotional intimacy"),
+        ("physical_intimacy_level", "Physical intimacy"),
+        ("physical_intimacy_progression", "Physical intimacy progression"),
+        ("communication_patterns", "Communication patterns"),
+        ("communication_style", "Communication style"),
+        ("conflict_resolution_style", "Conflict resolution"),
+        ("trust_level", "Trust"),
+        ("commitment_level", "Commitment"),
+        ("attachment_style", "Attachment style"),
+        ("love_languages", "Love languages"),
+        ("how_met", "How they met"),
+        ("first_impression", "First impression"),
+        ("turning_points", "Turning points"),
+        ("challenges", "Challenges"),
+        ("growth_areas", "Growth areas"),
+        ("shared_activities", "Shared activities"),
+        ("dynamic_description", "Dynamic"),
+        ("emotional_impact", "Emotional impact"),
+        ("significance", "Significance"),
+    ]
+    private func romanticCard(_ r: PersonMemoryDetail) -> some View {
+        let title = r.memoryId.flatMap { vm.memoryTitles[$0] }
+        let date = r.memoryId.flatMap { vm.memoryDates[$0] } ?? EDFormat.value(r.obj["date"]) ?? EDFormat.value(r.obj["memory_date"])
+        let reserved = Set(Self.romanticKnown.map { $0.0 }).union(["partner_name", "memory_id", "date", "memory_date"])
+        let extraKeys = r.obj.keys.filter { !reserved.contains($0) }.sorted()
+        return VStack(alignment: .leading, spacing: 8) {
+            FlowLayout(spacing: 8, lineSpacing: 8) {
+                if let p = r.obj["partner_name"]?.displayString { EDPill(text: p, icon: "heart") }
+                if let title { EDPill(text: title, icon: "book.closed") }
+                if let date { EDPill(text: date, icon: "calendar") }
+            }
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Self.romanticKnown, id: \.0) { key, label in detailField(label, r.obj[key]) }
+                ForEach(extraKeys, id: \.self) { k in detailField(humanize(k), r.obj[k]) }   // any others present
+            }
+        }
+        .padding(14).frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(hex: 0xfaf7f0), in: RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(WT.ink.opacity(0.07), lineWidth: 1))
+    }
+
+    /// First non-empty scalar among the given keys.
+    private func firstStr(_ o: [String: JSONValue], _ keys: String...) -> String? {
+        for k in keys { if let v = o[k]?.displayString { return v } }
+        return nil
     }
 
     // MARK: Everything they said (dialogue_spoken) — the centerpiece; collapsed by default.

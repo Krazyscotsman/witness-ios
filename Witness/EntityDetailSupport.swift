@@ -130,3 +130,12 @@ struct PersonMemoryDetail: Identifiable {
     let memoryId: String?
     let obj: [String: JSONValue]
 }
+
+/// A single hero card spec (best-pick surfaces at the top of the page).
+struct EDHero: Identifiable {
+    let id = UUID()
+    let title: String
+    let body: String
+    let memoryId: String?
+    var quoted: Bool = false
+}
