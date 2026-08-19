@@ -123,3 +123,10 @@ struct DialogueLine: Identifiable {
     let scene: Int?
     let order: Int?
 }
+
+/// One per-memory people-detail record from attributes.people_details_by_memory (dict value or array element).
+struct PersonMemoryDetail: Identifiable {
+    let id = UUID()
+    let memoryId: String?
+    let obj: [String: JSONValue]
+}
