@@ -113,7 +113,7 @@ final class EntityDetailViewModel: ObservableObject {
 
     /// attributes[key] → memory-scoped records. Dict (keyed by memory_id, ordered by linked_memories) OR array
     /// (order preserved). Defensive: unknown shape → []. Shared by people / arcs / romantic (and Phase 5).
-    private func records(_ key: String) -> [PersonMemoryDetail] {
+    func records(_ key: String) -> [PersonMemoryDetail] {
         guard let v = detail?.attributes?[key] else { return [] }
         if let dict = v.objectValue {
             let order = Dictionary(linkedMemories.enumerated().compactMap { (i, lm) in lm.id.map { ($0, i) } },
@@ -213,6 +213,7 @@ struct EntityDetailPage: View {
                         acrossMemoriesSection
                         relationshipEvolutionSection
                         romanticDynamicsSection
+                        phase5Sections
                         linkedMemoriesSection
                     }
                 }
@@ -509,6 +510,134 @@ struct EntityDetailPage: View {
         for k in keys { if let v = o[k]?.displayString { return v } }
         return nil
     }
+
+    // MARK: Phase 5 — remaining attributes.* sections (spec-driven; collapsed; empty → omitted)
+
+    @ViewBuilder private var phase5Sections: some View {
+        ForEach(Self.phase5Specs) { attrSection($0) }
+    }
+
+    @ViewBuilder private func attrSection(_ spec: AttrSectionSpec) -> some View {
+        let rows = vm.records(spec.key)
+        if !rows.isEmpty {
+            EDSection(spec.title, count: rows.count, defaultExpanded: false) {
+                VStack(spacing: 12) { ForEach(rows) { attrCard($0, spec) } }
+            }
+        }
+    }
+
+    private func attrCard(_ r: PersonMemoryDetail, _ spec: AttrSectionSpec) -> some View {
+        let quote = spec.quoteKeys.lazy.compactMap { r.obj[$0]?.displayString }.first
+        let lead  = spec.leadKeys.lazy.compactMap { r.obj[$0]?.displayString }.first
+        let pills = pillData(r, spec)
+        return VStack(alignment: .leading, spacing: 8) {
+            if let quote {
+                Text("“\(quote)”").font(.serif(17)).italic().foregroundStyle(WT.ink.opacity(0.9))
+                    .lineSpacing(4).fixedSize(horizontal: false, vertical: true)
+            }
+            if let lead {
+                Text(lead).font(.serif(16)).foregroundStyle(WT.ink.opacity(0.85))
+                    .lineSpacing(4).fixedSize(horizontal: false, vertical: true)
+            }
+            if !pills.isEmpty {
+                FlowLayout(spacing: 8, lineSpacing: 8) { ForEach(pills) { EDPill(text: $0.text, icon: $0.icon, tone: $0.tone) } }
+            }
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(spec.fields) { f in edField(f.label, r.obj[f.key], kind: f.kind) }
+            }
+        }
+        .padding(14).frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(hex: 0xfaf7f0), in: RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(WT.ink.opacity(0.07), lineWidth: 1))
+    }
+
+    private func pillData(_ r: PersonMemoryDetail, _ spec: AttrSectionSpec) -> [EDPillData] {
+        var out: [EDPillData] = []
+        for p in spec.pills {
+            let raw = p.resolveEntity ? resolvedPerson(r.obj[p.key]?.stringValue) : r.obj[p.key]?.displayString
+            if let v = raw?.trimmingCharacters(in: .whitespaces), !v.isEmpty {
+                out.append(EDPillData(text: p.prefix + v, icon: p.icon, tone: p.tone))
+            }
+        }
+        let mem = r.memoryId.flatMap { vm.memoryTitles[$0] } ?? r.obj["memory_title"]?.displayString
+        if let mem, !mem.isEmpty { out.append(EDPillData(text: mem, icon: "book.closed", tone: WV.teal)) }
+        return out
+    }
+
+    @ViewBuilder private func edField(_ label: String, _ v: JSONValue?, kind: EDFieldKind) -> some View {
+        switch kind {
+        case .text:
+            detailField(label, v)
+        case .entity:
+            EDFieldRow(label: label, value: resolvedPerson(v?.stringValue))   // nil → renders nothing
+        case .entityArray:
+            let names = (v?.arrayValue ?? []).compactMap { resolvedPerson($0.stringValue) }
+            if !names.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(label).font(.system(size: 12, weight: .medium)).foregroundStyle(WT.ink.opacity(0.45))
+                    EDPillWrap(values: names)
+                }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 6)
+            }
+        }
+    }
+
+    /// Person/entity resolution: name from the map, keep plain names, drop unknown UUIDs (never render raw).
+    private func resolvedPerson(_ raw: String?) -> String? {
+        guard let raw = raw?.trimmingCharacters(in: .whitespaces), !raw.isEmpty else { return nil }
+        if let n = vm.entityNames[raw] { return n }
+        return UUID(uuidString: raw) == nil ? raw : nil
+    }
+
+    private static let phase5Specs: [AttrSectionSpec] = [
+        .init(title: "Notable lines", key: "dialogue_and_quotes",
+              quoteKeys: ["quote_text", "quote"],
+              pills: [.init(key: "significance", icon: "star", tone: WV.gold),
+                      .init(key: "significance_type"),
+                      .init(key: "emotional_tone", icon: "heart", tone: WV.gold),
+                      .init(key: "context")]),
+        .init(title: "Emotions across memories", key: "emotions_by_memory",
+              pills: [.init(key: "emotion_type", icon: "heart", tone: WV.gold),
+                      .init(key: "intensity", prefix: "Intensity ")],
+              fields: [.init(key: "trigger_description", label: "Trigger")]),
+        .init(title: "Emotional truths", key: "emotional_truths",
+              leadKeys: ["truth_statement", "truth", "description"],
+              pills: [.init(key: "truth_type"), .init(key: "weight", prefix: "Weight ")],
+              fields: [.init(key: "still_held", label: "Still held")]),
+        .init(title: "Life impacts", key: "life_impacts",
+              leadKeys: ["description"],
+              pills: [.init(key: "impact_type"), .init(key: "severity", icon: "star", tone: WV.gold)],
+              fields: [.init(key: "still_affecting", label: "Still affecting")]),
+        .init(title: "Activities", key: "activities",
+              leadKeys: ["description"],
+              pills: [.init(key: "activity_type"), .init(key: "location", icon: "mappin.and.ellipse")],
+              fields: [.init(key: "participants", label: "Participants", kind: .entityArray)]),
+        .init(title: "Place details", key: "places_details",
+              pills: [.init(key: "location_type", icon: "mappin.and.ellipse")],
+              fields: [.init(key: "setting_description", label: "Setting"),
+                       .init(key: "sensory_details", label: "Sensory details"),
+                       .init(key: "emotional_significance", label: "Emotional significance")]),
+        .init(title: "Triangulation", key: "triangulation_dynamics",
+              pills: [.init(key: "triangle_type"), .init(key: "significance_level", icon: "star", tone: WV.gold)],
+              fields: [.init(key: "person_pulling", label: "Person pulling", kind: .entity),
+                       .init(key: "person_against", label: "Person against", kind: .entity),
+                       .init(key: "dynamic_description", label: "Dynamic"),
+                       .init(key: "tactics_used", label: "Tactics"),
+                       .init(key: "emotional_impact", label: "Emotional impact"),
+                       .init(key: "narrator_response", label: "Your response"),
+                       .init(key: "still_active", label: "Still active")]),
+        .init(title: "Cultural practices", key: "cultural_practices",
+              leadKeys: ["description"],
+              pills: [.init(key: "practice_name"), .init(key: "practice_type"), .init(key: "cultural_origin")],
+              fields: [.init(key: "significance", label: "Significance"),
+                       .init(key: "personal_meaning", label: "Personal meaning")]),
+        .init(title: "Events & entertainment", key: "events_and_entertainment",
+              leadKeys: ["description"],
+              pills: [.init(key: "event_name"), .init(key: "event_type"),
+                      .init(key: "venue_name", icon: "mappin.and.ellipse"),
+                      .init(key: "significance", icon: "star", tone: WV.gold)],
+              fields: [.init(key: "memorable_moments", label: "Memorable moments"),
+                       .init(key: "emotional_impact", label: "Emotional impact")]),
+    ]
 
     // MARK: Everything they said (dialogue_spoken) — the centerpiece; collapsed by default.
     @ViewBuilder private var dialogueSection: some View {

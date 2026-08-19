@@ -139,3 +139,36 @@ struct EDHero: Identifiable {
     let memoryId: String?
     var quoted: Bool = false
 }
+
+// MARK: - Phase 5 declarative section engine
+
+enum EDFieldKind { case text, entity, entityArray }
+
+struct EDField: Identifiable {
+    let key: String
+    let label: String
+    var kind: EDFieldKind = .text
+    var id: String { key }
+}
+
+struct EDPillSpec {
+    let key: String
+    var icon: String? = nil
+    var tone: Color = WV.teal
+    var resolveEntity: Bool = false     // value is an entity UUID → resolve or omit
+    var prefix: String = ""
+}
+
+/// Declarative section: lead text (quote = italic, plain = serif), a pills row, then field rows. Rendered over
+/// records(key); empty records → the section is omitted entirely.
+struct AttrSectionSpec: Identifiable {
+    let title: String
+    let key: String
+    var quoteKeys: [String] = []        // first non-empty → italic “quote”
+    var leadKeys: [String] = []         // first non-empty → serif body
+    var pills: [EDPillSpec] = []
+    var fields: [EDField] = []
+    var id: String { key }
+}
+
+struct EDPillData: Identifiable { let id = UUID(); let text: String; let icon: String?; let tone: Color }
