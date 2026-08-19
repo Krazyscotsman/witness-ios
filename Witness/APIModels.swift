@@ -212,12 +212,14 @@ struct ProfileDTO: Decodable {
     let onboardingCompleted: Bool?
     let companionName: String?
     let companionVoice: String?
+    let enableGraphView: Bool?          // Enable Details View flag (mirrored locally at launch)
 
     enum CodingKeys: String, CodingKey {
         case id
         case onboardingCompleted = "onboarding_completed"
         case companionName = "companion_name"
         case companionVoice = "companion_voice"
+        case enableGraphView = "enable_graph_view"
     }
 }
 
@@ -274,6 +276,7 @@ struct ProfileUpdateRequest: Encodable {
     let companionVoice: String?
     let companionPersonality: String?
     let customVoiceName: String?
+    var enableGraphView: Bool? = nil        // sent alone by the Advanced toggle; omitted (nil) by the editor
 
     enum CodingKeys: String, CodingKey {
         case firstName = "first_name"
@@ -282,6 +285,7 @@ struct ProfileUpdateRequest: Encodable {
         case companionVoice = "companion_voice"
         case companionPersonality = "companion_personality"
         case customVoiceName = "custom_voice_name"
+        case enableGraphView = "enable_graph_view"
     }
 }
 
@@ -313,12 +317,12 @@ struct EntityDetailDTO: Decodable {
     let type: String?
     let isAnchor: Bool?
     let linkedMemories: [LinkedMemory]?
+    let attributes: JSONValue?          // opaque — decode-safe for any shape; never dumped, read by key
 
     enum CodingKeys: String, CodingKey {
-        case id, name, type
+        case id, name, type, attributes
         case isAnchor = "is_anchor"
         case linkedMemories = "linked_memories"
-        // `attributes` omitted on purpose (untyped dict).
     }
 }
 

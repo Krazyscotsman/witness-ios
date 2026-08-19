@@ -21,7 +21,11 @@ struct SettingsView: View {
     @AppStorage(Profile.textSizeKey) private var textSize: String = "medium"
     @AppStorage(Profile.themeKey) private var theme: String = "system"
     @AppStorage(Profile.memoryPrivacyKey) private var memoryPrivacy: String = "open"
+    @AppStorage(Profile.enableDetailsKey) private var enableDetails: Bool = false
     @AppStorage(HintSettings.key) private var showHints: Bool = true
+
+    @State private var savingDetails = false
+    @State private var detailsError = false
 
     @State private var showDatePicker = false
     @State private var pickerDate = Date()
@@ -62,6 +66,7 @@ struct SettingsView: View {
                     conversationSection
                     appearanceSection
                     privacySection
+                    advancedSection
                     hintsSection
                     moreSection
                     legalSection
@@ -285,6 +290,41 @@ struct SettingsView: View {
     private var privacySection: some View {
         sectionCard("Privacy", hint: "Whether new memories are open to your companion by default, or kept private.") {
             segmentedRow("New memories", options: [("Open", "open"), ("Private", "private")], selection: $memoryPrivacy)
+        }
+    }
+
+    // MARK: Advanced (Enable Details View — saved to the profile as enable_graph_view)
+    private var advancedSection: some View {
+        sectionCard("Advanced", hint: "Extra detail surfaces for exploring the story more deeply.") {
+            Toggle(isOn: Binding(get: { enableDetails }, set: { setEnableDetails($0) })) {
+                settingLabel("Enable Details View", "Show entity details and advanced panels.")
+            }
+            .tint(WV.teal)
+            .disabled(savingDetails)
+            .padding(.vertical, 6)
+            if detailsError {
+                Text("Couldn’t save that setting — check your connection and try again.")
+                    .font(.system(size: 12)).foregroundStyle(WV.danger).fixedSize(horizontal: false, vertical: true)
+                    .padding(.bottom, 6)
+            }
+        }
+    }
+
+    private func setEnableDetails(_ on: Bool) {
+        let previous = enableDetails
+        enableDetails = on                         // optimistic local mirror (instant UI)
+        detailsError = false; savingDetails = true
+        Task {
+            do {
+                try await auth.updateProfile(ProfileUpdateRequest(
+                    firstName: nil, lastName: nil, companionName: nil,
+                    companionVoice: nil, companionPersonality: nil, customVoiceName: nil,
+                    enableGraphView: on))
+            } catch {
+                enableDetails = previous           // revert on failure
+                detailsError = true
+            }
+            savingDetails = false
         }
     }
 

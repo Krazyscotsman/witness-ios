@@ -139,6 +139,9 @@ final class AuthManager: ObservableObject {
             // Stored as-is; Speaker tolerates a bare gender ("female"/"male") or a full <style>_<gender> id.
             UserDefaults.standard.set(voice, forKey: Profile.voiceKey)
         }
+        if let on = p.enableGraphView {
+            UserDefaults.standard.set(on, forKey: Profile.enableDetailsKey)   // mirror Enable Details View
+        }
     }
 
     /// Runtime expiry handling for GUARDED endpoints. Call when a guarded request throws

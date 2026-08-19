@@ -23,6 +23,8 @@ enum Profile {
     static let textSizeKey = "settings.textSize"           // "small" | "medium" | "large"
     static let themeKey = "settings.theme"                 // "system" | "light" | "dark"
     static let memoryPrivacyKey = "settings.memoryPrivacy" // "open" | "private"
+
+    static let enableDetailsKey = "settings.enableDetails" // Bool; mirrors profile.enable_graph_view
 }
 
 struct YouView: View {

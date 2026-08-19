@@ -339,6 +339,7 @@ struct RelationshipDetailView: View {
     @State private var isSaving = false
     @State private var errorMessage: String?
     @State private var d = RelationshipDraft()
+    @AppStorage(Profile.enableDetailsKey) private var enableDetails = false
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -378,6 +379,23 @@ struct RelationshipDetailView: View {
                 .overlay(RoundedRectangle(cornerRadius: 18).stroke(WT.ink.opacity(0.07), lineWidth: 1))
             }
             if let story = row.story { storyCard(story) }
+            if enableDetails, let eid = row.personEntityId, !eid.isEmpty {
+                NavigationLink {
+                    EntityDetailPage(entityId: eid,
+                                     seed: EntitySeed(name: row.displayName, type: "person", isAnchor: true,
+                                                      relationship: row.typeLabel),
+                                     auth: auth)
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "rectangle.expand.vertical").font(.system(size: 14, weight: .semibold))
+                        Text("See everything").font(.system(size: 15, weight: .semibold))
+                    }
+                    .foregroundStyle(WV.teal).frame(maxWidth: .infinity).frame(height: 48)
+                    .background(WV.teal.opacity(0.10), in: RoundedRectangle(cornerRadius: 14))
+                    .overlay(RoundedRectangle(cornerRadius: 14).stroke(WV.teal.opacity(0.25), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+            }
             HStack(spacing: 12) {
                 Button { startEdit() } label: {
                     Text("Edit").font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)

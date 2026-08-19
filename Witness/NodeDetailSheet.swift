@@ -44,6 +44,7 @@ struct NodeDetailSheet: View {
     @ObservedObject var auth: AuthManager
     var onExplore: ((GNode) -> Void)? = nil        // graph re-center; hidden when nil
     @StateObject private var vm = EntityMemoriesViewModel()
+    @AppStorage(Profile.enableDetailsKey) private var enableDetails = false
 
     var body: some View {
         NavigationStack {
@@ -61,6 +62,7 @@ struct NodeDetailSheet: View {
                             .background(WV.teal, in: RoundedRectangle(cornerRadius: 14))
                         }.witnessPress()
                     }
+                    if enableDetails { showMoreLink }
                     memoriesSection
                 }
                 .padding(.horizontal, 24).padding(.top, 14).padding(.bottom, 24)
@@ -103,6 +105,25 @@ struct NodeDetailSheet: View {
         .padding(.horizontal, 16)
         .background(WV.card, in: RoundedRectangle(cornerRadius: 16))
         .overlay(RoundedRectangle(cornerRadius: 16).stroke(WT.ink.opacity(0.08), lineWidth: 1))
+    }
+
+    // "Show more" → full entity detail page (only when Enable Details is on). node.id is the entity id.
+    private var showMoreLink: some View {
+        NavigationLink {
+            EntityDetailPage(entityId: node.id,
+                             seed: EntitySeed(name: node.label, type: nil, isAnchor: node.isAnchor,
+                                              relationship: node.primaryRel),
+                             auth: auth)
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "rectangle.expand.vertical").font(.system(size: 14, weight: .semibold))
+                Text("Show more").font(.system(size: 15, weight: .semibold))
+            }
+            .foregroundStyle(WV.teal).frame(maxWidth: .infinity).frame(height: 46)
+            .background(WV.teal.opacity(0.10), in: RoundedRectangle(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(WV.teal.opacity(0.25), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
     }
 
     private var memoriesSection: some View {
