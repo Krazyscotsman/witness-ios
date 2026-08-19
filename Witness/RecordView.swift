@@ -15,11 +15,12 @@ struct RecordView: View {
     /// Called once after a successful save so the presenter can refresh its list (e.g. Memories).
     var onSaved: (() -> Void)? = nil
 
-    enum Mode: String, CaseIterable { case speak = "Speak", type = "Type" }
+    enum Mode: String, CaseIterable { case speak = "Speak", type = "Type", video = "Video" }
     @StateObject private var recorder = AudioRecorder()
     @StateObject private var audioPlayer = AudioPlayer()
     @StateObject private var transcriber = Transcriber()   // on-device transcript for the review screen
     @StateObject private var saver = MemoryCreateViewModel()
+    @StateObject private var videoVM = VideoCaptureViewModel()   // Video mode: extract audio → on-device transcribe
 
     // Capture → review (Speak) / compose (Type) → processing → done | failed.
     enum Stage: Equatable { case compose, reviewing, processing, done, failed(String) }
@@ -31,6 +32,18 @@ struct RecordView: View {
     @State private var title = ""
     @State private var dateText = ""
     @State private var bodyText = ""
+    @State private var pendingVideoURL: URL?     // held until save, then linked to the memory id (local only)
+    @State private var showVideoRecorder = false
+    @State private var showVideoPicker = false
+
+    private var availableModes: [Mode] {
+        VideoCaptureViewModel.isSupported ? Mode.allCases : [.speak, .type]   // hide Video pre-iOS 26
+    }
+    // True while either transcription source is actively producing text (drives the review placeholder/status).
+    private var isBusyTranscribing: Bool {
+        if mode == .video { return videoVM.phase == .extracting || videoVM.phase == .transcribing }
+        return transcriber.isTranscribing
+    }
 
     var body: some View {
         ZStack {
@@ -40,11 +53,15 @@ struct RecordView: View {
                 VStack(spacing: 0) {
                     topBar
                     if !recorder.isRecording {
-                        ModeSwitcher(selection: $mode)
+                        ModeSwitcher(selection: $mode, modes: availableModes)
                             .padding(.horizontal, 24)
                             .padding(.top, 10)
                     }
-                    if mode == .speak { speakMode } else { typeMode }
+                    switch mode {
+                    case .speak: speakMode
+                    case .type:  typeMode
+                    case .video: videoMode
+                    }
                 }
             case .reviewing:
                 reviewingView
@@ -71,6 +88,50 @@ struct RecordView: View {
             // never on the button touch. The stop cue fires in stopRecording().
             if isRecording { Haptics.recordStart() }
         }
+        .fullScreenCover(isPresented: $showVideoRecorder) {
+            CameraPicker { media in if let u = media.videoURL { startVideo(u) } }
+        }
+        .fullScreenCover(isPresented: $showVideoPicker) {
+            VideoPicker { url in startVideo(url) }
+        }
+    }
+
+    // MARK: Video mode — record or import a video; transcription happens on-device in the review step.
+    private var videoMode: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            field("Title (optional)", text: $title)
+            field("When was this? (optional)", text: $dateText, hint: "“April 1993”, or “when I was 16.”")
+
+            Spacer(minLength: 8)
+            VStack(spacing: 12) {
+                Image(systemName: "video.circle.fill").font(.system(size: 64)).foregroundStyle(WV.teal.opacity(0.85))
+                Text("Record or choose a video").font(.serif(22)).foregroundStyle(WT.ink)
+                Text("We transcribe it on your device — the video stays here and is never uploaded.")
+                    .font(.system(size: 13)).foregroundStyle(WT.ink.opacity(0.5)).multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true).padding(.horizontal, 20)
+            }
+            .frame(maxWidth: .infinity)
+            Spacer()
+
+            VStack(spacing: 12) {
+                Button { showVideoRecorder = true } label: {
+                    HStack { Image(systemName: "video.fill"); Text("Record video") }
+                        .font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
+                        .frame(maxWidth: .infinity).frame(height: 54)
+                        .background(WV.teal, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                }
+                .witnessPress()
+                Button { showVideoPicker = true } label: {
+                    HStack { Image(systemName: "photo.on.rectangle"); Text("Import video") }
+                        .font(.system(size: 16, weight: .medium)).foregroundStyle(WV.teal)
+                        .frame(maxWidth: .infinity).frame(height: 50)
+                        .background(WV.teal.opacity(0.10), in: RoundedRectangle(cornerRadius: 16))
+                        .overlay(RoundedRectangle(cornerRadius: 16).stroke(WV.teal.opacity(0.25), lineWidth: 1))
+                }
+                .witnessPress()
+            }
+        }
+        .padding(.horizontal, 24).padding(.top, 16).padding(.bottom, 24)
     }
 
     // MARK: Top bar
@@ -262,7 +323,7 @@ struct RecordView: View {
                     transcriptStatusLine
 
                     ZStack(alignment: .topLeading) {
-                        if reviewText.isEmpty && !transcriber.isTranscribing {
+                        if reviewText.isEmpty && !isBusyTranscribing {
                             Text("Type what you said…")
                                 .font(.serif(17)).foregroundStyle(WT.ink.opacity(0.35))
                                 .padding(.horizontal, 16).padding(.vertical, 14)
@@ -295,7 +356,11 @@ struct RecordView: View {
         .onAppear { if let url = recorder.lastRecordingURL { audioPlayer.load(url) } }
         .onChange(of: transcriber.transcript) { _, newValue in
             // Auto-fill while recognition is running; once it finishes, stop overwriting so the user can edit.
-            if transcriber.isTranscribing || reviewText.isEmpty { reviewText = newValue }
+            if mode != .video, transcriber.isTranscribing || reviewText.isEmpty { reviewText = newValue }
+        }
+        .onChange(of: videoVM.transcript) { _, newValue in
+            // Video's on-device transcript lands once; fill it (the user can then edit before saving).
+            if mode == .video, !newValue.isEmpty { reviewText = newValue }
         }
         .onDisappear { audioPlayer.stop() }
     }
@@ -327,21 +392,36 @@ struct RecordView: View {
     }
 
     @ViewBuilder private var transcriptStatusLine: some View {
-        switch transcriber.state {
-        case .running:
-            Text("Transcribing on your device…")
-                .font(.system(size: 12)).foregroundStyle(WT.ink.opacity(0.45))
-        case .denied:
-            Text("Transcription needs Speech access — you can type your memory here instead.")
-                .font(.system(size: 12)).foregroundStyle(WT.ink.opacity(0.45)).fixedSize(horizontal: false, vertical: true)
-        case .unavailable(let reason):
-            Text("Couldn’t transcribe automatically (\(reason)) — type your memory here.")
-                .font(.system(size: 12)).foregroundStyle(WT.ink.opacity(0.45)).fixedSize(horizontal: false, vertical: true)
-        case .noSpeech:
-            Text("Didn’t catch any speech — type your memory here.")
-                .font(.system(size: 12)).foregroundStyle(WT.ink.opacity(0.45))
-        case .idle, .done:
-            EmptyView()
+        if mode == .video {
+            switch videoVM.phase {
+            case .extracting:
+                Text("Extracting audio…")
+                    .font(.system(size: 12)).foregroundStyle(WT.ink.opacity(0.45))
+            case .transcribing:
+                Text("Transcribing… \(Int(videoVM.progress * 100))%")
+                    .font(.system(size: 12)).foregroundStyle(WT.ink.opacity(0.45))
+            case .failed(let m):
+                Text(m).font(.system(size: 12)).foregroundStyle(WT.ink.opacity(0.45)).fixedSize(horizontal: false, vertical: true)
+            case .idle, .ready:
+                EmptyView()
+            }
+        } else {
+            switch transcriber.state {
+            case .running:
+                Text("Transcribing on your device…")
+                    .font(.system(size: 12)).foregroundStyle(WT.ink.opacity(0.45))
+            case .denied:
+                Text("Transcription needs Speech access — you can type your memory here instead.")
+                    .font(.system(size: 12)).foregroundStyle(WT.ink.opacity(0.45)).fixedSize(horizontal: false, vertical: true)
+            case .unavailable(let reason):
+                Text("Couldn’t transcribe automatically (\(reason)) — type your memory here.")
+                    .font(.system(size: 12)).foregroundStyle(WT.ink.opacity(0.45)).fixedSize(horizontal: false, vertical: true)
+            case .noSpeech:
+                Text("Didn’t catch any speech — type your memory here.")
+                    .font(.system(size: 12)).foregroundStyle(WT.ink.opacity(0.45))
+            case .idle, .done:
+                EmptyView()
+            }
         }
     }
 
@@ -394,7 +474,7 @@ struct RecordView: View {
                 }
                 .witnessPress()
                 Button { backFromFailure() } label: {
-                    Text(mode == .speak ? "Back to my words" : "Back to editing")
+                    Text(mode == .type ? "Back to editing" : "Back to my words")
                         .font(.system(size: 15, weight: .medium)).foregroundStyle(WV.teal).frame(height: 24)
                 }
                 .witnessPress()
@@ -471,6 +551,15 @@ struct RecordView: View {
     // Type mode → create directly from the typed text (no audio).
     private func saveMemory() { submit(text: bodyText, audio: nil) }
 
+    // Video mode → keep the local URL, mint a session, kick off extract+transcribe, go to the review screen.
+    private func startVideo(_ url: URL) {
+        sessionID = UUID().uuidString
+        pendingVideoURL = url
+        reviewText = ""
+        videoVM.process(videoURL: url)
+        withAnimation { stage = .reviewing }
+    }
+
     /// The single create path: POST /memories (blocking) then best-effort media upload, via the saver VM.
     /// On success → confirmation + onSaved refresh; on failure → retry screen with text + recording preserved.
     private func submit(text: String, audio: URL?) {
@@ -486,7 +575,8 @@ struct RecordView: View {
         Task {
             let id = await saver.save(text: trimmed, sessionID: sessionID, title: titleOpt,
                                       memoryDate: memoryDate, audioURL: audio, auth: auth)
-            if id != nil {
+            if let id {
+                if mode == .video, let v = pendingVideoURL { VideoStore.link(v, to: id) }   // video stays local
                 onSaved?()
                 withAnimation { stage = .done }
             } else {
@@ -497,15 +587,19 @@ struct RecordView: View {
         }
     }
     private func retrySubmit() {
-        if mode == .speak { submit(text: reviewText, audio: recorder.lastRecordingURL) }
-        else { submit(text: bodyText, audio: nil) }
+        switch mode {
+        case .speak: submit(text: reviewText, audio: recorder.lastRecordingURL)
+        case .video: submit(text: reviewText, audio: nil)   // video stays local; text-only create
+        case .type:  submit(text: bodyText, audio: nil)
+        }
     }
     private func backFromFailure() {
         audioPlayer.stop()
-        withAnimation { stage = (mode == .speak) ? .reviewing : .compose }
+        withAnimation { stage = (mode == .type) ? .compose : .reviewing }   // Speak/Video keep the transcript
     }
     private func backToCompose() {
         transcriber.cancel()
+        videoVM.reset()
         audioPlayer.stop()
         withAnimation { stage = .compose }
     }
@@ -530,14 +624,19 @@ struct RecordView: View {
 // MARK: - Branded Speak/Type toggle (teal pill on a soft track).
 private struct ModeSwitcher: View {
     @Binding var selection: RecordView.Mode
+    var modes: [RecordView.Mode]
     @Namespace private var ns
+
+    private func icon(_ m: RecordView.Mode) -> String {
+        switch m { case .speak: return "mic.fill"; case .type: return "pencil"; case .video: return "video.fill" }
+    }
 
     var body: some View {
         HStack(spacing: 4) {
-            ForEach(RecordView.Mode.allCases, id: \.self) { m in
+            ForEach(modes, id: \.self) { m in
                 let sel = (m == selection)
                 HStack(spacing: 7) {
-                    Image(systemName: m == .speak ? "mic.fill" : "pencil")
+                    Image(systemName: icon(m))
                         .font(.system(size: 13, weight: .semibold))
                     Text(m.rawValue).font(.system(size: 15, weight: sel ? .semibold : .regular))
                 }
