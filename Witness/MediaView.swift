@@ -182,6 +182,16 @@ struct MediaView: View {
                     Text(name).font(.system(size: 12, weight: .medium)).foregroundStyle(WT.ink.opacity(0.7))
                         .lineLimit(1).padding(8).background(.ultraThinMaterial, in: Capsule()).padding(10)
                 }
+                if item.isAIGenerated {
+                    HStack(spacing: 3) {
+                        Image(systemName: "sparkles").font(.system(size: 9, weight: .semibold))
+                        Text("AI").font(.system(size: 9, weight: .semibold))
+                    }
+                    .foregroundStyle(.white).padding(.horizontal, 6).padding(.vertical, 3)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .padding(6)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                }
             }
             .frame(height: h).frame(maxWidth: .infinity)
             .clipShape(RoundedRectangle(cornerRadius: big ? 18 : 12))

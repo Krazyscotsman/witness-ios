@@ -741,9 +741,30 @@ nonisolated struct MediaItemDTO: Decodable, Identifiable {
     let memoryTitle: String?
     let memoryDate: String?
     let narratorAge: Int?
-    // `metadata` omitted on purpose (loose/untyped).
+    let metadata: JSONValue?  // loose/untyped — decoded opaquely so any shape is decode-safe
+
+    // AI-generated images are tagged by metadata.source == "ai_generated" (NOT file_type).
+    var aiSource: String? {
+        if case .object(let o)? = metadata, case .string(let s)? = o["source"] { return s }
+        return nil
+    }
+    var isAIGenerated: Bool { aiSource == "ai_generated" }
 }
 nonisolated struct MediaURLResponse: Decodable { let url: String? }   // GET /api/v1/media/{id}/url (presign refresh)
+
+/// GET /api/v1/memories/{id}/media — media rows for one memory (same item shape as the gallery).
+nonisolated struct MemoryMediaResponse: Decodable { let media: [MediaItemDTO]? }
+
+/// POST /visualize/{id}?view_angle=… — SYNCHRONOUS AI image generation. ⚠️ Failure is HTTP 200 with
+/// {success:false, error}; read `success` from the body, not the HTTP status. Decoded by the DEFAULT decoder
+/// (APIClient.post), so explicit CodingKeys map media_id.
+nonisolated struct VisualizeResponse: Decodable {
+    let success: Bool?
+    let mediaId: String?
+    let url: String?
+    let error: String?
+    enum CodingKeys: String, CodingKey { case success, url, error; case mediaId = "media_id" }
+}
 
 // GET /api/v1/memories/{id}/audio?voice=&style=warm_memory → base64 WAV + meta (HD/Gemini memory voice).
 // .convertFromSnakeCase.

@@ -8,6 +8,7 @@ struct MemoryDetailView: View {
     @AppStorage(Profile.voiceKey) private var voiceKey: String = "playful_female"
     @AppStorage("listen.preferHD") private var preferHD = false
     @StateObject private var vm = MemoryDetailViewModel()
+    @StateObject private var visualizeVM = MemoryVisualizeViewModel()
     @StateObject private var audioPlayer = AudioPlayer()          // now the HD (WAV) player
     @StateObject private var speaker = Speaker()
     @State private var showAsk = false
@@ -73,6 +74,7 @@ struct MemoryDetailView: View {
         .navigationBarBackButtonHidden(true)
         .toolbar(.hidden, for: .navigationBar)
         .task { await vm.load(id: listItem.id, auth: auth) }
+        .task { await visualizeVM.loadExisting(memoryId: listItem.id, auth: auth) }
         .onAppear {
             onlyDefaultVoice = Speaker.readingVoiceInfo().isDefaultOnly
         }
@@ -111,8 +113,65 @@ struct MemoryDetailView: View {
             if let emotions = vm.detail?.emotions, !emotions.isEmpty { emotionsSection(emotions) }
             if let quotes = vm.detail?.quotes, !quotes.isEmpty { quotesSection(quotes) }
 
+            aiImageSection
+
             askCard.padding(.top, 4)
         }
+    }
+
+    // MARK: - AI image ("Picture this memory") — generate a server-side AI image, display newest under the memory.
+    private var aiImageSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionLabel("Picture this memory")
+            if let hero = visualizeVM.images.first {
+                CachedRemoteImage(mediaId: hero.id, rawURL: hero.url, vm: visualizeVM, auth: auth)
+                    .frame(maxWidth: .infinity).frame(height: 240)
+                    .clipShape(RoundedRectangle(cornerRadius: 18))
+                    .overlay(RoundedRectangle(cornerRadius: 18).stroke(WT.ink.opacity(0.06), lineWidth: 1))
+                    .overlay(alignment: .topLeading) { aiBadge.padding(10) }
+            }
+            generateControl
+            switch visualizeVM.phase {
+            case .generating:
+                HStack(spacing: 10) {
+                    ProgressView().tint(WV.teal)
+                    Text("Generating your image… this can take up to a minute.")
+                        .font(.system(size: 13)).foregroundStyle(WT.ink.opacity(0.55))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            case .failed(let m):
+                Text(m).font(.system(size: 12)).foregroundStyle(WV.danger).fixedSize(horizontal: false, vertical: true)
+            case .idle:
+                EmptyView()
+            }
+        }
+        .padding(.top, 4)
+    }
+
+    private var generateControl: some View {
+        Button { Task { await visualizeVM.generate(memoryId: listItem.id, auth: auth) } } label: {
+            HStack(spacing: 7) {
+                Image(systemName: "sparkles").font(.system(size: 14, weight: .medium))
+                Text(visualizeVM.hasAIImage ? "Regenerate image" : "Generate image").font(.system(size: 14, weight: .medium))
+            }
+            .foregroundStyle(WV.teal).padding(.horizontal, 14).frame(height: 38)
+            .background(WV.teal.opacity(0.10), in: Capsule())
+            .overlay(Capsule().stroke(WV.teal.opacity(0.25), lineWidth: 1))
+        }
+        .disabled(visualizeVM.phase == .generating)
+        .opacity(visualizeVM.phase == .generating ? 0.45 : 1)
+        .witnessPress()
+        .witnessHint("Generate an AI image that pictures this memory.")
+    }
+
+    private var aiBadge: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "sparkles").font(.system(size: 10, weight: .semibold))
+            Text("AI").font(.system(size: 10, weight: .semibold))
+        }
+        .foregroundStyle(.white).padding(.horizontal, 8).padding(.vertical, 4)
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay(Capsule().stroke(.white.opacity(0.35), lineWidth: 1))
     }
 
     // MARK: - Narrative (lazy, chunked — scales to any size, never blanks)
