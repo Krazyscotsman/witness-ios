@@ -18,6 +18,8 @@ final class EntityDetailViewModel: ObservableObject {
     enum LoadState: Equatable { case idle, loading, loaded, failed(String) }
     @Published private(set) var state: LoadState = .idle
     @Published private(set) var detail: EntityDetailDTO?
+    @Published private(set) var entityNames: [String: String] = [:]   // uuid → name (responder resolution)
+    private var namesLoaded = false
     private enum SessionError: Error { case sessionEnded }
 
     func load(entityId: String, auth: AuthManager) async {
@@ -37,6 +39,45 @@ final class EntityDetailViewModel: ObservableObject {
     }
 
     var linkedMemories: [LinkedMemory] { detail?.linkedMemories ?? [] }
+
+    /// Load the entity list once (cache) for responder-name resolution. Failure leaves the map empty → pills omit.
+    func loadEntityNames(auth: AuthManager) async {
+        if namesLoaded { return }
+        namesLoaded = true
+        if let list = try? await withAuth(auth, {
+            try await APIClient.shared.get("/api/v1/entities?limit=1000&offset=0", timeout: 30, as: [EntitySummary].self)
+        }) {
+            var map: [String: String] = [:]
+            for e in list {
+                if let n = e.name?.trimmingCharacters(in: .whitespaces), !n.isEmpty { map[e.id] = n }
+            }
+            entityNames = map
+        }
+    }
+
+    /// Memory titles from Phase-1 linked_memories → [id: title] (neutral fallback handled at the call site).
+    var memoryTitles: [String: String] {
+        var m: [String: String] = [:]
+        for lm in linkedMemories {
+            if let id = lm.id, let t = lm.title?.trimmingCharacters(in: .whitespaces), !t.isEmpty { m[id] = t }
+        }
+        return m
+    }
+
+    /// attributes.dialogue_spoken → ordered lines; empty-quote rows skipped; backend order preserved (verbatim).
+    var dialogueLines: [DialogueLine] {
+        guard let arr = detail?.attributes?["dialogue_spoken"]?.arrayValue else { return [] }
+        return arr.compactMap { el in
+            guard let o = el.objectValue,
+                  let raw = o["quote"]?.stringValue,
+                  !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            return DialogueLine(quote: raw,
+                                memoryId: o["memory_id"]?.stringValue,
+                                responderId: o["responder_entity_id"]?.stringValue,
+                                scene: o["scene_number"]?.intValue,
+                                order: o["dialogue_order"]?.intValue)
+        }
+    }
 
     /// Count of non-empty top-level attribute keys — the honest "Populated sections" number. Opaque; never dumped.
     var populatedSectionCount: Int {
@@ -75,6 +116,7 @@ struct EntityDetailPage: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var vm = EntityDetailViewModel()
     @StateObject private var speaker = Speaker()
+    @State private var shownDialogue = 50
 
     private var name: String { vm.detail?.name ?? seed.name ?? "Entity" }
     private var type: String? { vm.detail?.type ?? seed.type }
@@ -92,6 +134,7 @@ struct EntityDetailPage: View {
                     case .failed(let m):  failedBlock(m)
                     case .loaded:
                         summaryCards
+                        dialogueSection
                         linkedMemoriesSection
                     }
                 }
@@ -101,6 +144,7 @@ struct EntityDetailPage: View {
         }
         .navigationBarBackButtonHidden(true).toolbar(.hidden, for: .navigationBar)
         .task { await vm.load(entityId: entityId, auth: auth) }
+        .task { await vm.loadEntityNames(auth: auth) }        // responder-name resolution (parallel)
         .onDisappear { speaker.stop() }
     }
 
@@ -152,6 +196,59 @@ struct EntityDetailPage: View {
         if let t = type?.capitalized, !t.isEmpty { parts.append(t) }
         parts.append("\(vm.linkedMemories.count) linked memories")
         speaker.speak(parts.joined(separator: ". "))
+    }
+
+    // MARK: Everything they said (dialogue_spoken) — the centerpiece; collapsed by default.
+    @ViewBuilder private var dialogueSection: some View {
+        let all = vm.dialogueLines
+        let total = all.count
+        if total > 0 {
+            EDSection("Everything they said", count: total, defaultExpanded: false) {
+                let shown = Array(all.prefix(shownDialogue))
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(Array(shown.enumerated()), id: \.element.id) { i, line in
+                        if i == 0 || line.memoryId != shown[i - 1].memoryId {   // header when the memory changes
+                            Text(memoryHeader(line.memoryId).uppercased())
+                                .font(.system(size: 11, weight: .semibold)).tracking(1.2).foregroundStyle(WT.ink.opacity(0.4))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.top, i == 0 ? 0 : 6)
+                        }
+                        dialogueRow(line)
+                    }
+                    if shownDialogue < total {
+                        Button { shownDialogue = min(shownDialogue + 50, total) } label: {
+                            Text("Show 50 more — showing \(min(shownDialogue, total)) of \(total)")
+                                .font(.system(size: 14, weight: .medium)).foregroundStyle(WV.teal)
+                                .frame(maxWidth: .infinity).frame(height: 44)
+                                .background(WV.teal.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+                        }.witnessPress()
+                    } else {
+                        Text("Showing all \(total)").font(.system(size: 12)).foregroundStyle(WT.ink.opacity(0.4))
+                    }
+                }
+            }
+        }
+    }
+    private func memoryHeader(_ memId: String?) -> String {
+        if let id = memId, let t = vm.memoryTitles[id], !t.isEmpty { return t }
+        return "A memory"     // neutral when unresolved
+    }
+    private func dialogueRow(_ line: DialogueLine) -> some View {
+        let responder = line.responderId.flatMap { vm.entityNames[$0] }?.trimmingCharacters(in: .whitespaces)
+        return VStack(alignment: .leading, spacing: 6) {
+            Text("“\(line.quote)”")                                  // verbatim — their actual voice
+                .font(.serif(17)).italic().foregroundStyle(WT.ink.opacity(0.9))
+                .lineSpacing(4).fixedSize(horizontal: false, vertical: true)
+            if line.scene != nil || (responder?.isEmpty == false) {
+                HStack(spacing: 8) {
+                    if let s = line.scene { EDPill(text: "Scene \(s)", icon: "film") }
+                    if let r = responder, !r.isEmpty { EDPill(text: "to \(r)", icon: "arrow.turn.up.right") }
+                    // responder pill shows the resolved NAME only — a raw UUID is never rendered
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 4)
     }
 
     // MARK: Summary cards
