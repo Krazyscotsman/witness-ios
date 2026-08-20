@@ -79,20 +79,34 @@ final class EntityDetailViewModel: ObservableObject {
         }
     }
 
-    /// Count of non-empty top-level attribute keys — the honest "Populated sections" number. Opaque; never dumped.
-    var populatedSectionCount: Int {
-        guard case .object(let o)? = detail?.attributes else { return 0 }
-        return o.values.filter { !Self.isEmptyValue($0) }.count
+    // The real section types the page renders, in on-screen order. `anchorID` = the section's scroll id +
+    // expand key (differs from the attributes key for the four fixed sections). This is the single source of
+    // truth for the "Sections" count and the tile's scroll target — NOT the flattened top-level key count
+    // (which is polluted with loose sub-fields of these same sections).
+    struct RenderedSectionRef { let attrKey: String; let anchorID: String }
+    static let renderedSections: [RenderedSectionRef] = [
+        .init(attrKey: "dialogue_spoken",            anchorID: "dialogue"),
+        .init(attrKey: "people_details_by_memory",   anchorID: "across"),
+        .init(attrKey: "relationship_arcs_by_memory", anchorID: "arcs"),
+        .init(attrKey: "romantic_dynamics",          anchorID: "romantic"),
+        .init(attrKey: "dialogue_and_quotes",        anchorID: "dialogue_and_quotes"),
+        .init(attrKey: "emotions_by_memory",         anchorID: "emotions_by_memory"),
+        .init(attrKey: "emotional_truths",           anchorID: "emotional_truths"),
+        .init(attrKey: "life_impacts",               anchorID: "life_impacts"),
+        .init(attrKey: "activities",                 anchorID: "activities"),
+        .init(attrKey: "places_details",             anchorID: "places_details"),
+        .init(attrKey: "triangulation_dynamics",     anchorID: "triangulation_dynamics"),
+        .init(attrKey: "cultural_practices",         anchorID: "cultural_practices"),
+        .init(attrKey: "events_and_entertainment",   anchorID: "events_and_entertainment"),
+    ]
+    /// True when the section for `attrKey` actually renders (its data is non-empty).
+    private func hasSection(_ attrKey: String) -> Bool {
+        attrKey == "dialogue_spoken" ? !dialogueLines.isEmpty : !records(attrKey).isEmpty
     }
-    private static func isEmptyValue(_ v: JSONValue) -> Bool {
-        switch v {
-        case .null: return true
-        case .string(let s): return s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        case .array(let a): return a.isEmpty
-        case .object(let o): return o.isEmpty
-        case .bool, .number: return false
-        }
-    }
+    /// How many of the 13 real sections are on screen (matches what the user sees).
+    var renderedSectionCount: Int { Self.renderedSections.filter { hasSection($0.attrKey) }.count }
+    /// Scroll/expand target = the first rendered section in on-screen order (generic; not hardcoded).
+    var firstRenderedAnchorID: String? { Self.renderedSections.first { hasSection($0.attrKey) }?.anchorID }
     /// Provisional (pending the spec): read a scalar string attribute for a header pill.
     func attrString(_ key: String) -> String? {
         guard case .object(let o)? = detail?.attributes, case .string(let s)? = o[key],
@@ -198,17 +212,8 @@ struct EntityDetailPage: View {
         Binding(get: { forceExpand.contains(key) },
                 set: { on in if on { forceExpand.insert(key) } else { forceExpand.remove(key) } })
     }
-    /// First populated STRUCTURED detail section (the data-review target for the Sections tile); dialogue fallback.
-    private var reviewTargetKey: String? {
-        if !vm.peopleDetails.isEmpty { return "across" }
-        if !vm.relationshipArcs.isEmpty { return "arcs" }
-        if !vm.romanticDynamics.isEmpty { return "romantic" }
-        for spec in Self.phase5Specs where !vm.records(spec.key).isEmpty { return spec.key }
-        if !vm.dialogueLines.isEmpty { return "dialogue" }
-        return nil
-    }
     private func openReview(_ proxy: ScrollViewProxy) {
-        guard let key = reviewTargetKey else { return }
+        guard let key = vm.firstRenderedAnchorID else { return }   // first section actually on screen (generic)
         withAnimation(.easeInOut(duration: 0.35)) {
             forceExpand.insert(key)          // auto-expand the target section
             proxy.scrollTo(key, anchor: .top)
@@ -735,7 +740,7 @@ struct EntityDetailPage: View {
             }.buttonStyle(.plain)
             // Sections → scroll to + auto-expand the first populated detail section (data review).
             Button { openReview(proxy) } label: {
-                summaryCard("Sections", "\(vm.populatedSectionCount)", "square.stack.3d.up", tappable: true)
+                summaryCard("Sections", "\(vm.renderedSectionCount)", "square.stack.3d.up", tappable: true)
             }.buttonStyle(.plain)
         }
     }
