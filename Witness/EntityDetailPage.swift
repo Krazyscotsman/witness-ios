@@ -191,6 +191,29 @@ struct EntityDetailPage: View {
     @StateObject private var vm = EntityDetailViewModel()
     @StateObject private var speaker = Speaker()
     @State private var shownDialogue = 50
+    @State private var forceExpand: Set<String> = []     // section keys force-opened (e.g. via the Sections tile)
+
+    /// Drives an EDSection's expansion by membership in `forceExpand` (also captures the user's manual toggles).
+    private func expandBinding(_ key: String) -> Binding<Bool> {
+        Binding(get: { forceExpand.contains(key) },
+                set: { on in if on { forceExpand.insert(key) } else { forceExpand.remove(key) } })
+    }
+    /// First populated STRUCTURED detail section (the data-review target for the Sections tile); dialogue fallback.
+    private var reviewTargetKey: String? {
+        if !vm.peopleDetails.isEmpty { return "across" }
+        if !vm.relationshipArcs.isEmpty { return "arcs" }
+        if !vm.romanticDynamics.isEmpty { return "romantic" }
+        for spec in Self.phase5Specs where !vm.records(spec.key).isEmpty { return spec.key }
+        if !vm.dialogueLines.isEmpty { return "dialogue" }
+        return nil
+    }
+    private func openReview(_ proxy: ScrollViewProxy) {
+        guard let key = reviewTargetKey else { return }
+        withAnimation(.easeInOut(duration: 0.35)) {
+            forceExpand.insert(key)          // auto-expand the target section
+            proxy.scrollTo(key, anchor: .top)
+        }
+    }
 
     private var name: String { vm.detail?.name ?? seed.name ?? "Entity" }
     private var type: String? { vm.detail?.type ?? seed.type }
@@ -200,24 +223,25 @@ struct EntityDetailPage: View {
     var body: some View {
         ZStack(alignment: .top) {
             ParchmentBackground()
-            ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 18) {
-                    header
-                    switch vm.state {
-                    case .idle, .loading: loadingBlock
-                    case .failed(let m):  failedBlock(m)
-                    case .loaded:
-                        heroCards
-                        summaryCards
-                        dialogueSection
-                        acrossMemoriesSection
-                        relationshipEvolutionSection
-                        romanticDynamicsSection
-                        phase5Sections
-                        linkedMemoriesSection
+            ScrollViewReader { proxy in
+                ScrollView(showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 18) {
+                        header
+                        switch vm.state {
+                        case .idle, .loading: loadingBlock
+                        case .failed(let m):  failedBlock(m)
+                        case .loaded:
+                            heroCards
+                            summaryCards(proxy)
+                            dialogueSection
+                            acrossMemoriesSection
+                            relationshipEvolutionSection
+                            romanticDynamicsSection
+                            phase5Sections
+                        }
                     }
+                    .padding(.horizontal, 24).padding(.top, 60).padding(.bottom, 110)   // clears the tab bar
                 }
-                .padding(.horizontal, 24).padding(.top, 60).padding(.bottom, 40)
             }
             navBar
         }
@@ -326,9 +350,10 @@ struct EntityDetailPage: View {
     @ViewBuilder private var acrossMemoriesSection: some View {
         let people = vm.peopleDetails
         if !people.isEmpty {
-            EDSection("Across memories", count: people.count, defaultExpanded: false) {
+            EDSection("Across memories", count: people.count, expanded: expandBinding("across")) {
                 VStack(spacing: 12) { ForEach(people) { personMemoryCard($0) } }
             }
+            .id("across")
         }
     }
     private func personMemoryCard(_ d: PersonMemoryDetail) -> some View {
@@ -388,9 +413,10 @@ struct EntityDetailPage: View {
     @ViewBuilder private var relationshipEvolutionSection: some View {
         let arcs = vm.relationshipArcs
         if !arcs.isEmpty {
-            EDSection("Relationship evolution", count: arcs.count, defaultExpanded: false) {
+            EDSection("Relationship evolution", count: arcs.count, expanded: expandBinding("arcs")) {
                 VStack(spacing: 12) { ForEach(arcs) { arcCard($0) } }
             }
+            .id("arcs")
         }
     }
     private func arcCard(_ a: PersonMemoryDetail) -> some View {
@@ -457,9 +483,10 @@ struct EntityDetailPage: View {
     @ViewBuilder private var romanticDynamicsSection: some View {
         let rows = vm.romanticDynamics
         if !rows.isEmpty {
-            EDSection("Romantic dynamics", count: rows.count, defaultExpanded: false) {
+            EDSection("Romantic dynamics", count: rows.count, expanded: expandBinding("romantic")) {
                 VStack(spacing: 12) { ForEach(rows) { romanticCard($0) } }
             }
+            .id("romantic")
         }
     }
     private static let romanticKnown: [(String, String)] = [
@@ -520,9 +547,10 @@ struct EntityDetailPage: View {
     @ViewBuilder private func attrSection(_ spec: AttrSectionSpec) -> some View {
         let rows = vm.records(spec.key)
         if !rows.isEmpty {
-            EDSection(spec.title, count: rows.count, defaultExpanded: false) {
+            EDSection(spec.title, count: rows.count, expanded: expandBinding(spec.key)) {
                 VStack(spacing: 12) { ForEach(rows) { attrCard($0, spec) } }
             }
+            .id(spec.key)
         }
     }
 
@@ -644,7 +672,7 @@ struct EntityDetailPage: View {
         let all = vm.dialogueLines
         let total = all.count
         if total > 0 {
-            EDSection("Everything they said", count: total, defaultExpanded: false) {
+            EDSection("Everything they said", count: total, expanded: expandBinding("dialogue")) {
                 let shown = Array(all.prefix(shownDialogue))
                 VStack(alignment: .leading, spacing: 12) {
                     ForEach(Array(shown.enumerated()), id: \.element.id) { i, line in
@@ -668,6 +696,7 @@ struct EntityDetailPage: View {
                     }
                 }
             }
+            .id("dialogue")
         }
     }
     private func memoryHeader(_ memId: String?) -> String {
@@ -693,18 +722,30 @@ struct EntityDetailPage: View {
     }
 
     // MARK: Summary cards
-    private var summaryCards: some View {
+    private func summaryCards(_ proxy: ScrollViewProxy) -> some View {
         let cols = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
         return LazyVGrid(columns: cols, spacing: 12) {
             summaryCard("Entity type", (type ?? "—").capitalized, "tag")
             summaryCard("Anchor", isAnchor ? "Yes" : "No", "star")
-            summaryCard("Linked memories", "\(vm.linkedMemories.count)", "book.closed")
-            summaryCard("Sections", "\(vm.populatedSectionCount)", "square.stack.3d.up")
+            // Linked memories → dedicated list → MemoryDetailView.
+            NavigationLink {
+                EntityLinkedMemoriesList(title: name, memories: vm.linkedMemories, auth: auth)
+            } label: {
+                summaryCard("Linked memories", "\(vm.linkedMemories.count)", "book.closed", tappable: true)
+            }.buttonStyle(.plain)
+            // Sections → scroll to + auto-expand the first populated detail section (data review).
+            Button { openReview(proxy) } label: {
+                summaryCard("Sections", "\(vm.populatedSectionCount)", "square.stack.3d.up", tappable: true)
+            }.buttonStyle(.plain)
         }
     }
-    private func summaryCard(_ label: String, _ value: String, _ icon: String) -> some View {
+    private func summaryCard(_ label: String, _ value: String, _ icon: String, tappable: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Image(systemName: icon).font(.system(size: 15)).foregroundStyle(WV.teal)
+            HStack {
+                Image(systemName: icon).font(.system(size: 15)).foregroundStyle(WV.teal)
+                Spacer()
+                if tappable { Image(systemName: "chevron.right").font(.system(size: 11, weight: .semibold)).foregroundStyle(WT.ink.opacity(0.3)) }
+            }
             Text(value).font(.serif(20)).foregroundStyle(WT.ink).lineLimit(1)
             Text(label).font(.system(size: 12)).foregroundStyle(WT.ink.opacity(0.5))
         }
@@ -713,50 +754,6 @@ struct EntityDetailPage: View {
         .overlay(RoundedRectangle(cornerRadius: 16).stroke(WT.ink.opacity(0.07), lineWidth: 1))
     }
 
-    // MARK: Linked Memories (open by default)
-    private var linkedMemoriesSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("LINKED MEMORIES").font(.system(size: 11, weight: .semibold)).tracking(1.3).foregroundStyle(WT.ink.opacity(0.4))
-            if vm.linkedMemories.isEmpty {
-                Text("No linked memories.").font(.system(size: 14)).foregroundStyle(WT.ink.opacity(0.5)).padding(.vertical, 6)
-            } else {
-                VStack(spacing: 8) {
-                    ForEach(Array(vm.linkedMemories.enumerated()), id: \.offset) { _, m in memoryRow(m) }
-                }
-            }
-        }
-    }
-    @ViewBuilder private func memoryRow(_ m: LinkedMemory) -> some View {
-        let title = (m.title ?? "").trimmingCharacters(in: .whitespaces)
-        let display = title.isEmpty ? "Untitled memory" : title
-        let sub = [(m.date ?? "").trimmingCharacters(in: .whitespaces),
-                   (m.role ?? "").trimmingCharacters(in: .whitespaces)].filter { !$0.isEmpty }.joined(separator: " · ")
-        if let id = m.id, !id.isEmpty {
-            // Destination-closure (not value-based) so it works in any ancestor stack without needing a
-            // registered navigationDestination — avoids a duplicate MemoryDTO destination in the graph stack.
-            NavigationLink {
-                MemoryDetailView(listItem: MemoryDTO(id: id, title: m.title, exactDate: m.date), auth: auth)
-            } label: {
-                memoryRowContent(display, sub, tappable: true)
-            }.buttonStyle(.plain)
-        } else {
-            memoryRowContent(display, sub, tappable: false)
-        }
-    }
-    private func memoryRowContent(_ title: String, _ sub: String, tappable: Bool) -> some View {
-        HStack(spacing: 12) {
-            ZStack { Circle().fill(WV.teal.opacity(0.12)); Image(systemName: "book.closed").font(.system(size: 14)).foregroundStyle(WV.teal) }.frame(width: 38, height: 38)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.serif(16)).foregroundStyle(WT.ink).lineLimit(1)
-                if !sub.isEmpty { Text(sub).font(.system(size: 12)).foregroundStyle(WT.ink.opacity(0.5)).lineLimit(1) }
-            }
-            Spacer(minLength: 4)
-            if tappable { Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(WT.ink.opacity(0.3)) }
-        }
-        .padding(12).frame(maxWidth: .infinity, alignment: .leading)
-        .background(WV.card, in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(WT.ink.opacity(0.07), lineWidth: 1))
-    }
 
     // MARK: states + bits
     private var loadingBlock: some View {
@@ -790,5 +787,71 @@ struct EntityDetailPage: View {
     }
     private func humanize(_ s: String) -> String {
         s.split(separator: "_").map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined(separator: " ")
+    }
+}
+
+// MARK: - Dedicated linked-memories list (reached via the "Linked memories" summary tile)
+struct EntityLinkedMemoriesList: View {
+    let title: String
+    let memories: [LinkedMemory]
+    @ObservedObject var auth: AuthManager
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            ParchmentBackground()
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("LINKED MEMORIES").font(.system(size: 11, weight: .semibold)).tracking(1.3).foregroundStyle(WV.gold)
+                    Text(title).font(.serif(26)).foregroundStyle(WT.ink).fixedSize(horizontal: false, vertical: true).padding(.bottom, 4)
+                    if memories.isEmpty {
+                        Text("No linked memories.").font(.system(size: 14)).foregroundStyle(WT.ink.opacity(0.5)).padding(.vertical, 6)
+                    } else {
+                        VStack(spacing: 8) {
+                            ForEach(Array(memories.enumerated()), id: \.offset) { _, m in row(m) }
+                        }
+                    }
+                }
+                .padding(.horizontal, 24).padding(.top, 60).padding(.bottom, 110)
+            }
+            HStack {
+                Button { dismiss() } label: {
+                    HStack(spacing: 4) { Image(systemName: "chevron.left").font(.system(size: 16, weight: .semibold)); Text("Back").font(.system(size: 16)) }
+                        .foregroundStyle(WV.teal).frame(height: 44)
+                }.witnessPress()
+                Spacer()
+            }
+            .padding(.horizontal, 16).background(WV.parchment.opacity(0.96))
+        }
+        .navigationBarBackButtonHidden(true).toolbar(.hidden, for: .navigationBar)
+    }
+
+    @ViewBuilder private func row(_ m: LinkedMemory) -> some View {
+        let display = (m.title ?? "").trimmingCharacters(in: .whitespaces).isEmpty ? "Untitled memory" : m.title!
+        let sub = [(m.date ?? "").trimmingCharacters(in: .whitespaces),
+                   (m.role ?? "").trimmingCharacters(in: .whitespaces)].filter { !$0.isEmpty }.joined(separator: " · ")
+        if let id = m.id, !id.isEmpty {
+            NavigationLink {
+                MemoryDetailView(listItem: MemoryDTO(id: id, title: m.title, exactDate: m.date), auth: auth)
+            } label: {
+                rowContent(display, sub, tappable: true)
+            }.buttonStyle(.plain)
+        } else {
+            rowContent(display, sub, tappable: false)
+        }
+    }
+    private func rowContent(_ title: String, _ sub: String, tappable: Bool) -> some View {
+        HStack(spacing: 12) {
+            ZStack { Circle().fill(WV.teal.opacity(0.12)); Image(systemName: "book.closed").font(.system(size: 14)).foregroundStyle(WV.teal) }.frame(width: 38, height: 38)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.serif(16)).foregroundStyle(WT.ink).lineLimit(1)
+                if !sub.isEmpty { Text(sub).font(.system(size: 12)).foregroundStyle(WT.ink.opacity(0.5)).lineLimit(1) }
+            }
+            Spacer(minLength: 4)
+            if tappable { Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(WT.ink.opacity(0.3)) }
+        }
+        .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+        .background(WV.card, in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(WT.ink.opacity(0.07), lineWidth: 1))
     }
 }

@@ -43,16 +43,22 @@ enum EDFormat {
 struct EDSection<Content: View>: View {
     let title: String
     var count: Int? = nil
-    @State private var expanded: Bool
+    @State private var internalExpanded: Bool
+    private let externalExpanded: Binding<Bool>?     // when set, drives expansion (e.g. a tile "open for review")
     @ViewBuilder let content: () -> Content
 
-    init(_ title: String, count: Int? = nil, defaultExpanded: Bool = false, @ViewBuilder content: @escaping () -> Content) {
-        self.title = title; self.count = count; self.content = content
-        _expanded = State(initialValue: defaultExpanded)
+    init(_ title: String, count: Int? = nil, defaultExpanded: Bool = false,
+         expanded: Binding<Bool>? = nil, @ViewBuilder content: @escaping () -> Content) {
+        self.title = title; self.count = count; self.externalExpanded = expanded; self.content = content
+        _internalExpanded = State(initialValue: defaultExpanded)
+    }
+    private var isExpanded: Bool { externalExpanded?.wrappedValue ?? internalExpanded }
+    private func toggle() {
+        if let externalExpanded { externalExpanded.wrappedValue.toggle() } else { internalExpanded.toggle() }
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Button { withAnimation(.easeOut(duration: 0.2)) { expanded.toggle() } } label: {
+            Button { withAnimation(.easeOut(duration: 0.2)) { toggle() } } label: {
                 HStack(spacing: 8) {
                     Text(title.uppercased()).font(.system(size: 12, weight: .semibold)).tracking(1.3).foregroundStyle(WV.gold)
                     if let count {
@@ -60,11 +66,11 @@ struct EDSection<Content: View>: View {
                             .padding(.horizontal, 7).padding(.vertical, 2).background(WT.ink.opacity(0.06), in: Capsule())
                     }
                     Spacer()
-                    Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.system(size: 12, weight: .semibold)).foregroundStyle(WT.ink.opacity(0.4))
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down").font(.system(size: 12, weight: .semibold)).foregroundStyle(WT.ink.opacity(0.4))
                 }
                 .contentShape(Rectangle())
             }.buttonStyle(.plain)
-            if expanded { content() }
+            if isExpanded { content() }
         }
         .padding(16).frame(maxWidth: .infinity, alignment: .leading)
         .background(WV.card, in: RoundedRectangle(cornerRadius: 18))

@@ -53,7 +53,7 @@ struct HomeView: View {
                     }
                     .padding(.horizontal, 28)
                     .padding(.top, 16)
-                    .padding(.bottom, 40)
+                    .padding(.bottom, 110)   // clears the tab bar so the "Talk it through" button is fully visible
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
