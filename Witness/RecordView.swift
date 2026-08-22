@@ -12,6 +12,9 @@ struct RecordView: View {
     @AppStorage(Profile.companionNameKey) private var companion: String = Profile.defaultCompanionName
 
     @ObservedObject var auth: AuthManager
+    /// Optional activation prompt to seed the compose screen. When present, Record opens in Type
+    /// mode and shows the prompt as a disappearing placeholder (never prefilled into the body).
+    var initialSuggestion: String? = nil
     /// Called once after a successful save so the presenter can refresh its list (e.g. Memories).
     var onSaved: (() -> Void)? = nil
 
@@ -35,6 +38,15 @@ struct RecordView: View {
     @State private var pendingVideoURL: URL?     // held until save, then linked to the memory id (local only)
     @State private var showVideoRecorder = false
     @State private var showVideoPicker = false
+    @State private var didApplySuggestion = false   // one-shot: seed Type mode from initialSuggestion
+
+    /// The Type-mode placeholder: the activation prompt when seeded, otherwise the default invite.
+    private var typePlaceholder: String {
+        if let s = initialSuggestion?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty {
+            return s
+        }
+        return "Write the memory in your own words…"
+    }
 
     private var availableModes: [Mode] {
         VideoCaptureViewModel.isSupported ? Mode.allCases : [.speak, .type]   // hide Video pre-iOS 26
@@ -82,6 +94,15 @@ struct RecordView: View {
             Button("Cancel", role: .cancel) { }
         } message: {
             Text("Allow microphone access in Settings to record a voice memory.")
+        }
+        .onAppear {
+            // Seed Type mode once when opened from a Home prompt. onAppear (not init) so the rest
+            // of the compose state keeps its defaults; guarded so a later manual mode switch sticks.
+            guard !didApplySuggestion else { return }
+            didApplySuggestion = true
+            if let s = initialSuggestion?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty {
+                mode = .type
+            }
         }
         .onChange(of: recorder.isRecording) { _, isRecording in
             // Firm cue only when capture truly begins (after permission + record()),
@@ -229,7 +250,7 @@ struct RecordView: View {
 
             ZStack(alignment: .topLeading) {
                 if bodyText.isEmpty {
-                    Text("Write the memory in your own words…")
+                    Text(typePlaceholder)
                         .font(.serif(17)).foregroundStyle(WT.ink.opacity(0.35))
                         .padding(.horizontal, 16).padding(.vertical, 14)
                 }

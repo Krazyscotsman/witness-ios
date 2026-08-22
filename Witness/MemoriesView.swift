@@ -206,4 +206,18 @@ enum MemoryFormat {
         }
         return out.string(from: d)
     }
+
+    // The single "key line" for a memory (v1 media/summary display): the narrative snippet, else the
+    // first sentence of the full narrative, else the title. Empty only when a memory has nothing at all.
+    static func keyLine(_ m: MemoryDTO) -> String {
+        if let s = m.narrativeSnippet?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty {
+            return s
+        }
+        if let n = m.narrative?.trimmingCharacters(in: .whitespacesAndNewlines), !n.isEmpty {
+            let firstSentence = n.split(whereSeparator: { ".!?".contains($0) }).first.map(String.init) ?? n
+            let trimmed = firstSentence.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return trimmed }
+        }
+        return m.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
 }

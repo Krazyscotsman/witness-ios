@@ -1,72 +1,51 @@
 import SwiftUI
 
-// MARK: - Home ("Your Witness"). Real state derives from memory count (cached MemoriesVM) + hasEnoughData
-// (/explain-me/overview via HomeViewModel): total==0 → Begin, total>0 && !hasEnoughData → Learning,
-// hasEnoughData → Ready. While signals are still unknown we show a Neutral placeholder rather than flash the
-// wrong panel. Ready renders the real overview headline + core forces. Overview failure degrades to
-// count-only. Companion name is read dynamically (never hardcoded).
+// MARK: - Home ("Your Witness"). A single, calm invitation: a greeting and one floating prompt
+// that slowly cross-fades through the activation set. No stage machine, no forces, no recent list,
+// no /explain-me/overview load — Home no longer diagnoses; it invites. Tapping the prompt opens
+// Record seeded with that prompt (Type mode, disappearing placeholder). There is no global "+".
 struct HomeView: View {
     @ObservedObject var auth: AuthManager
     @ObservedObject var memoriesVM: MemoriesViewModel
     @Binding var tab: MainTabView.Tab
 
-    @StateObject private var vm = HomeViewModel()
-    @AppStorage(Profile.companionNameKey) private var companionName: String = Profile.defaultCompanionName
+    @StateObject private var vm = HomeActivationViewModel()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @AppStorage("witness.home.greetingVariant") private var greetingVariant = 0
+
     @State private var showRecord = false
-
-    enum Stage { case neutral, begin, learning, ready }
-
-    private var companion: String { companionName.isEmpty ? Profile.defaultCompanionName : companionName }
-
-    // Commit to a panel only when it can't be wrong; otherwise Neutral (no flashing).
-    private var stage: Stage {
-        let memKnown = memoriesVM.state == .loaded
-        let total = memoriesVM.total
-        switch vm.state {
-        case .loaded:
-            if memKnown { return total == 0 ? .begin : (vm.hasEnoughData ? .ready : .learning) }
-            return vm.hasEnoughData ? .ready : .neutral
-        case .failed:                                   // degrade → memory-count-only
-            if memKnown { return total == 0 ? .begin : .learning }
-            return .neutral
-        case .idle, .loading:
-            if memKnown && total == 0 { return .begin } // only safe early commit
-            return .neutral
-        }
-    }
+    @State private var suggestion: String?          // prompt text handed to RecordView
+    @State private var suggestionPromptID: String?  // so a successful save can retire/evolve its kind
 
     var body: some View {
         NavigationStack {
             ZStack {
                 ParchmentBackground()
-                ScrollView(showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: 24) {
-                        header
-                        Group {
-                            switch stage {
-                            case .neutral:  neutralContent
-                            case .begin:    beginContent
-                            case .learning: learningContent
-                            case .ready:    readyContent
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 28)
-                    .padding(.top, 16)
-                    .padding(.bottom, 110)   // clears the tab bar so the "Talk it through" button is fully visible
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                VStack(alignment: .leading, spacing: 0) {
+                    header
+                    Spacer()
+                    promptItem
+                    Spacer()
+                    Spacer()
+                }
+                .padding(.horizontal, 28)
+                .padding(.top, 16)
+                .padding(.bottom, 110)   // clears the tab bar
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .fullScreenCover(isPresented: $showRecord) {
+                RecordView(auth: auth, initialSuggestion: suggestion) {
+                    vm.didRecord(fromPromptID: suggestionPromptID)
+                    Task { await memoriesVM.refresh(auth: auth) }
                 }
             }
-            .navigationDestination(for: MemoryDTO.self) { m in MemoryDetailView(listItem: m, auth: auth) }
-            .fullScreenCover(isPresented: $showRecord) {
-                RecordView(auth: auth) { Task { await memoriesVM.refresh(auth: auth) } }
-            }
-            .task { await vm.load(auth: auth) }
-            .task { await memoriesVM.load(auth: auth) }
+            .task { vm.start() }
+            .onDisappear { vm.stop() }
+            .onAppear { greetingVariant = (greetingVariant + 1) % 3 }
         }
     }
 
-    // MARK: header (greeting is local; first-name greeting intentionally skipped)
+    // MARK: Header — rotating greeting + wordmark + compass. No card chrome.
     private var header: some View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 4) {
@@ -77,132 +56,51 @@ struct HomeView: View {
             CompassMark(color: WV.gold).frame(width: 30, height: 30)
         }
     }
+
+    // Three greeting variants; one is time-aware. Rotates each time Home appears.
     private var greeting: String {
+        let daypart: String
         switch Calendar.current.component(.hour, from: Date()) {
-        case 5..<12:  return "Good morning"
-        case 12..<17: return "Good afternoon"
-        case 17..<22: return "Good evening"
-        default:      return "Hello"
+        case 5..<12:  daypart = "morning"
+        case 12..<17: daypart = "afternoon"
+        case 17..<22: daypart = "evening"
+        default:      daypart = "night"
         }
+        let variants = ["Good \(daypart).", "Welcome back.", "Whenever you're ready."]
+        return variants[greetingVariant % variants.count]
     }
 
-    // MARK: Neutral — signals not yet known; calm, no claim, no wrong panel
-    private var neutralContent: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Your Witness").font(.serif(30)).foregroundStyle(WT.ink)
-            HStack(spacing: 10) {
-                ProgressView().tint(WV.teal)
-                Text("Reflecting on your story…").font(.system(size: 15)).foregroundStyle(WT.ink.opacity(0.55))
+    // MARK: Floating cycling prompt — premium, minimal, no card. Slow cross-fade + subtle grow-in,
+    // a light haptic on each change, all suppressed under Reduce Motion. Tap → Record with this prompt.
+    private var promptItem: some View {
+        Button {
+            beginRecord()
+        } label: {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("A MEMORY TO SHARE")
+                    .font(.system(size: 11, weight: .semibold)).tracking(1.5)
+                    .foregroundStyle(WT.ink.opacity(0.35))
+                Text(vm.currentText)
+                    .font(.serif(32)).foregroundStyle(WT.ink)
+                    .lineSpacing(5).fixedSize(horizontal: false, vertical: true)
+                    .id(vm.current?.id)
+                    .transition(promptTransition)
             }
-            .padding(.top, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
+        .witnessPress(scale: 0.98, dim: 0.9)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.9), value: vm.current?.id)
     }
 
-    // MARK: Begin (total == 0)
-    private var beginContent: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text("Your witness begins here.")
-                .font(.serif(30)).foregroundStyle(WT.ink).fixedSize(horizontal: false, vertical: true)
-            Text("Witness builds a living picture of your life from the moments you share. Record your first memory, and the mirror begins to fill.")
-                .font(.system(size: 16)).foregroundStyle(WT.ink.opacity(0.6)).lineSpacing(4).fixedSize(horizontal: false, vertical: true)
-            primaryButton("Record your first memory") { showRecord = true }.padding(.top, 6)
-        }
+    private var promptTransition: AnyTransition {
+        reduceMotion ? .opacity
+                     : .opacity.combined(with: .scale(scale: 0.98, anchor: .leading))
     }
 
-    // MARK: Learning (memories exist, not enough data yet)
-    private var learningContent: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text("The picture is forming.")
-                .font(.serif(30)).foregroundStyle(WT.ink).fixedSize(horizontal: false, vertical: true)
-            Text("Keep going — each memory you share adds depth. Soon the mirror will start to reflect you back.")
-                .font(.system(size: 16)).foregroundStyle(WT.ink.opacity(0.6)).lineSpacing(4).fixedSize(horizontal: false, vertical: true)
-            recentMemoriesCard
-            primaryButton("Add a memory") { showRecord = true }.padding(.top, 2)
-        }
-    }
-
-    // MARK: Ready (hasEnoughData) — real headline + core forces
-    private var readyContent: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text("HERE'S WHAT'S EMERGING")
-                .font(.system(size: 11, weight: .semibold)).tracking(1.5).foregroundStyle(WT.ink.opacity(0.4))
-            Text(vm.headline ?? "Here’s what’s emerging in the story you’ve told.")
-                .font(.serif(27)).foregroundStyle(WT.ink).lineSpacing(3).fixedSize(horizontal: false, vertical: true)
-            let forces = Array(vm.coreForces.prefix(3))
-            if !forces.isEmpty {
-                Text("ACTIVE FORCES")
-                    .font(.system(size: 11, weight: .semibold)).tracking(1.5).foregroundStyle(WT.ink.opacity(0.4)).padding(.top, 10)
-                VStack(spacing: 12) {
-                    ForEach(Array(forces.enumerated()), id: \.offset) { _, f in forceCard(f) }
-                }
-            }
-            recentMemoriesCard
-            primaryButton("Talk it through with \(companion)") { tab = .talk }.padding(.top, 6)
-        }
-    }
-    private func forceCard(_ f: ExForceDTO) -> some View {
-        HStack(alignment: .top, spacing: 14) {
-            Circle().fill(WV.gold).frame(width: 7, height: 7).padding(.top, 7)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(f.title ?? "A force in your story").font(.serif(18)).foregroundStyle(WT.ink)
-                Text(forceSubtitle(f)).font(.system(size: 13)).foregroundStyle(WT.ink.opacity(0.55))
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer()
-        }
-        .padding(18)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(WV.card, in: RoundedRectangle(cornerRadius: 20))
-        .overlay(RoundedRectangle(cornerRadius: 20).stroke(WT.ink.opacity(0.06), lineWidth: 1))
-        .shadow(color: WT.ink.opacity(0.04), radius: 10, y: 5)
-    }
-    private func forceSubtitle(_ f: ExForceDTO) -> String {
-        if let ii = f.identityImpact?.trimmingCharacters(in: .whitespacesAndNewlines), !ii.isEmpty { return ii }
-        let domains = (f.affectedDomains ?? []).prefix(3).map { AnchorText.titleCase($0) }.filter { !$0.isEmpty }
-        if !domains.isEmpty { return domains.joined(separator: " · ") }
-        return "A recurring force across your memories."
-    }
-
-    // MARK: Recent memories (top 2–3) → tap → MemoryDetailView
-    @ViewBuilder private var recentMemoriesCard: some View {
-        let recent = Array(memoriesVM.memories.prefix(3))
-        if !recent.isEmpty {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("PICK UP WHERE YOU LEFT OFF")
-                    .font(.system(size: 11, weight: .semibold)).tracking(1.5).foregroundStyle(WT.ink.opacity(0.4))
-                VStack(spacing: 10) { ForEach(recent) { m in recentRow(m) } }
-            }
-            .padding(.top, 4)
-        }
-    }
-    private func recentRow(_ m: MemoryDTO) -> some View {
-        NavigationLink(value: m) {
-            HStack(spacing: 12) {
-                ZStack { Circle().fill(WV.teal.opacity(0.12)); Image(systemName: "book.closed").font(.system(size: 15)).foregroundStyle(WV.teal) }
-                    .frame(width: 40, height: 40)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(m.title ?? "Untitled memory").font(.serif(17)).foregroundStyle(WT.ink).lineLimit(1)
-                    Text(MemoryFormat.date(m)).font(.system(size: 12)).foregroundStyle(WT.ink.opacity(0.5))
-                }
-                Spacer(minLength: 4)
-                Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(WT.ink.opacity(0.3))
-            }
-            .padding(14).frame(maxWidth: .infinity, alignment: .leading)
-            .background(WV.card, in: RoundedRectangle(cornerRadius: 16))
-            .overlay(RoundedRectangle(cornerRadius: 16).stroke(WT.ink.opacity(0.06), lineWidth: 1))
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func primaryButton(_ title: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
-                .frame(maxWidth: .infinity).frame(height: 54)
-                .background(WV.teal)
-                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .shadow(color: WV.teal.opacity(0.30), radius: 10, y: 6)
-        }
-        .witnessPress()
+    private func beginRecord() {
+        suggestion = vm.currentText
+        suggestionPromptID = vm.current?.id
+        showRecord = true
     }
 }
