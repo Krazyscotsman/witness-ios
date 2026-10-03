@@ -23,6 +23,41 @@ nonisolated enum AnchorText {
         if let d = f.date(from: String(s.prefix(10))) { let o = DateFormatter(); o.dateStyle = .long; return o.string(from: d) }
         return s
     }
+
+    /// A date AT THE PRECISION IT WAS GIVEN AT — or nil.
+    ///
+    /// ⛔ WHY THIS EXISTS. `date(_:)` above takes no precision and formats everything `.long`, so a
+    /// birthday the narrator gave as a YEAR is stored `1931-01-01` and rendered "January 1, 1931".
+    /// That is a wrong fact on the screen he opens to check facts, and it is more precise than his
+    /// own testimony. The backend has been sending the precision all along; nothing read it.
+    ///
+    /// NIL IN THREE CASES, and each is a refusal to invent rather than an oversight:
+    ///   * no date — whatever the precision says. MEASURED: all 47 anchor rows carry
+    ///     `person_birth_date_precision = 'year'` with NO birth date, because the column is
+    ///     defaulted, so a precision on its own must render nothing at all;
+    ///   * an unparseable stored date;
+    ///   * a precision this does not recognise, EVEN WITH A DATE PRESENT. We cannot know which part
+    ///     of a stored 'YYYY-MM-DD' he actually said, so nothing is shown. ⚠️ DAVID MUST CHECK THIS
+    ///     ONE: a row with a real date and a missing precision will stop displaying that date. There
+    ///     are zero such rows today on either database, and the web made the same choice last night,
+    ///     so the two surfaces agree — but it is the one behaviour here that can REMOVE something he
+    ///     can currently see.
+    ///
+    /// The vocabulary is `day | month | year`, compared lower-cased: the NBQ path writes lowercase
+    /// and this app's own editor writes `Day`/`Month`/`Year`, and both live in the same column.
+    static func date(_ raw: String?, precision: String?) -> String? {
+        guard let s = raw?.trimmingCharacters(in: .whitespaces), !s.isEmpty else { return nil }
+        let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd"
+        guard let d = f.date(from: String(s.prefix(10))) else { return nil }
+        let o = DateFormatter(); o.locale = Locale(identifier: "en_US_POSIX")
+        switch (precision ?? "").trimmingCharacters(in: .whitespaces).lowercased() {
+        case "day":   o.dateFormat = "MMMM d, yyyy"   // April 27, 1954
+        case "month": o.dateFormat = "MMMM yyyy"      // April 1954
+        case "year":  o.dateFormat = "yyyy"           // 1954
+        default:      return nil
+        }
+        return o.string(from: d)
+    }
     static func join(_ parts: [String?]) -> String {
         parts.compactMap { $0?.isEmpty == false ? $0 : nil }.joined(separator: " · ")
     }
@@ -53,7 +88,18 @@ nonisolated struct RelationshipRow: Decodable, AnchorRow {
     var firstName: String? = nil, middleName: String? = nil, lastName: String? = nil
     var nickname: String? = nil, maidenName: String? = nil
     var relationshipType: String? = nil, significance: String? = nil
+    // ⛔ WHAT THE RELATIONSHIP IS CALLED, decided by the server (2026-10-03). This app had no label
+    // map at all — only `AnchorText.titleCase`, which prettifies the raw token — so it disagreed
+    // with the backend on SEVENTEEN of 33 values: "Aunt Uncle Niece Nephew" for
+    // `aunt_uncle_niece_nephew`, "Parent Child" for `parent_child`, "Siblings" for `siblings`.
+    // Optional, so an older server falls back to exactly the previous behaviour.
+    var relationshipLabel: String? = nil
     var familyRole: String? = nil, datePrecision: String? = nil
+    // ⛔ `datePrecision` ABOVE IS ALWAYS NIL and has been for as long as the allowlist has existed:
+    // `date_precision` described start AND end at once, was retired, and is NOT in the columns this
+    // endpoint serves. The live pair is below. Left in place because the EDITOR still writes
+    // `date_precision` on save — removing it is a separate change with a write path attached.
+    var startDatePrecision: String? = nil, endDatePrecision: String? = nil
     var personBirthDate: String? = nil, personBirthDatePrecision: String? = nil
     var personDeathDate: String? = nil, personDeathDatePrecision: String? = nil
     var appearanceDescription: String? = nil, privacyLevel: String? = nil, pseudonym: String? = nil
@@ -91,32 +137,43 @@ nonisolated struct RelationshipRow: Decodable, AnchorRow {
     // HIS WORD FOR THEM, FIRST IN THE SUBTITLE. The heading is their name and this sits beneath it —
     // never one replacing the other. Shown only when it differs from the heading, so a person whose
     // name IS what he calls them does not read "Ma · Ma".
+    /// The server's curated label, else this app's own title-casing — the behaviour it had before.
+    /// ONE accessor so all three render sites below cannot diverge from each other the way the three
+    /// SURFACES did.
+    var relTypeLabel: String? {
+        relationshipLabel?.trimmingCharacters(in: .whitespaces).nilIfEmpty
+            ?? AnchorText.titleCase(relationshipType).nilIfEmpty
+    }
     var subtitle: String { AnchorText.join([familiarLabel,
-                                            AnchorText.titleCase(relationshipType).nilIfEmpty,
+                                            relTypeLabel,
                                             AnchorText.titleCase(significance).nilIfEmpty,
-                                            AnchorText.date(startDate)]) }
+                                            AnchorText.date(startDate, precision: startDatePrecision)]) }
     private var familiarLabel: String? {
         guard let f = familiarName?.trimmingCharacters(in: .whitespaces), !f.isEmpty,
               f != displayName else { return nil }
         return "Known to you as \(f)"
     }
     var sortKey: String { startDate ?? createdAt ?? "" }
-    var typeLabel: String? { AnchorText.titleCase(relationshipType).nilIfEmpty }
+    var typeLabel: String? { relTypeLabel }
     var story: String? { nbqResponse?.trimmingCharacters(in: .whitespaces).nilIfEmpty }
     var detailFields: [AnchorField] {
         [ .init(label: "Known to you as", value: familiarLabel == nil ? nil : familiarName),
           .init(label: "Nickname", value: nickname),
           .init(label: "Maiden name", value: maidenName),
-          .init(label: "Relationship type", value: AnchorText.titleCase(relationshipType).nilIfEmpty),
+          .init(label: "Relationship type", value: relTypeLabel),
           .init(label: "Significance", value: AnchorText.titleCase(significance).nilIfEmpty),
           .init(label: "Family role", value: AnchorText.titleCase(familyRole).nilIfEmpty),
-          .init(label: "Birth date", value: AnchorText.date(personBirthDate)),
-          .init(label: "Death date", value: AnchorText.date(personDeathDate)),
+          // THE FOUR DATES, EACH AT THE PRECISION HE GAVE IT. These rendered `.long` regardless, so
+          // a year-precision birthday read "January 1, 1931" — a date he never gave, on his own
+          // person's page. Only these four sites change; the other six categories still call the
+          // precision-free `date(_:)` and are the same class of defect, reported not touched.
+          .init(label: "Birth date", value: AnchorText.date(personBirthDate, precision: personBirthDatePrecision)),
+          .init(label: "Death date", value: AnchorText.date(personDeathDate, precision: personDeathDatePrecision)),
           .init(label: "Appearance", value: appearanceDescription),
           .init(label: "Privacy level", value: AnchorText.titleCase(privacyLevel).nilIfEmpty),
           .init(label: "Pseudonym", value: pseudonym),
-          .init(label: "Start date", value: AnchorText.date(startDate)),
-          .init(label: "End date", value: AnchorText.date(endDate)),
+          .init(label: "Start date", value: AnchorText.date(startDate, precision: startDatePrecision)),
+          .init(label: "End date", value: AnchorText.date(endDate, precision: endDatePrecision)),
           .init(label: "How we met", value: howMet),
           .init(label: "Relationship context", value: relationshipContext),
           .init(label: "How it ended", value: howEnded),
