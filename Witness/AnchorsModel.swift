@@ -117,8 +117,28 @@ enum AnchorSchema {
         func v(_ k: String) -> String { (r.values[k] ?? "").trimmingCharacters(in: .whitespaces) }
         switch category {
         case "relationships":
+            // ⛔ THIS IS THE DORMANT PATH, AND SAYING SO IS THE POINT (2026-10-03).
+            //
+            // `AnchorsView` — the only thing that calls `AnchorSchema.title` — is mounted NOWHERE:
+            // `InsightsView` routes the anchors tab to `AnchorRegistryView`, which renders
+            // `RelationshipRow.listTitle` instead. The local store above says it "stands in for
+            // /timeline/{category} until wired", and it never was.
+            //
+            // I REPORTED THIS FUNCTION AS THE LIVE ONE and concluded the iOS app had been showing
+            // her real name for months while the web showed 'Ma'. It had not: the live path prefers
+            // `person_canonical_name` FIRST, so iOS showed 'Ma' exactly like the web. A ruling was
+            // written on my misreading before I caught it.
+            //
+            // Fixed here anyway, in the same shape as the live one, so reviving this view cannot
+            // revive the old divergence. `display_name` is the server's single answer; the
+            // fallbacks below are reached only when it is absent, and they are kept in their
+            // original order so a stale build degrades to what it did before rather than to a blank.
+            let decided = v("display_name")
+            if !decided.isEmpty { return decided }
             let n = "\(v("first_name")) \(v("last_name"))".trimmingCharacters(in: .whitespaces)
-            return n.isEmpty ? (v("nickname").isEmpty ? "Unnamed" : v("nickname")) : n
+            if !n.isEmpty { return n }
+            if !v("person_canonical_name").isEmpty { return v("person_canonical_name") }
+            return v("nickname").isEmpty ? "Unnamed" : v("nickname")
         case "locations":  return v("location_name").isEmpty ? "Untitled" : v("location_name")
         case "jobs":       return v("employer_name").isEmpty ? "Untitled" : v("employer_name")
         case "education":  return v("institution_name").isEmpty ? "Untitled" : v("institution_name")

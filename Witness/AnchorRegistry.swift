@@ -61,22 +61,51 @@ nonisolated struct RelationshipRow: Decodable, AnchorRow {
     var howMet: String? = nil, relationshipContext: String? = nil, howEnded: String? = nil
     var lessonsLearned: String? = nil, notes: String? = nil, nbqResponse: String? = nil
     var createdAt: String? = nil
+    // THE SERVER'S SINGLE ANSWER (2026-10-03). `decided_name` is `display_name` under a second key:
+    // a stored `displayName` cannot coexist with the computed one below, so the backend carries the
+    // same value twice rather than this app renaming a property across seven structs and every view.
+    // `familiarName` is HIS WORD for them — kept beside the name, never instead of it.
+    var decidedName: String? = nil, familiarName: String? = nil
 
     var displayName: String {
+        // ⛔ WHY THE SERVER DECIDES THIS NOW. The rule had three homes — here, the web, and the
+        // backend — and they disagreed. THIS one preferred `person_canonical_name` above everything,
+        // so a grandmother whose entity is still called 'Ma' rendered as 'Ma' while her name sat in
+        // `first_name`/`last_name` on the very row being decoded. The backend's rule prefers the
+        // FULLER of the two by token-subset, so it answers 'Stella Crabtree' here and keeps 'Ma' as
+        // the familiar name.
+        //
+        // (And the record should say: I first reported the opposite — that this app had been right
+        // and the web wrong — after reading `AnchorSchema.title`, which belongs to a view that is
+        // mounted nowhere. This is the function that renders.)
+        if let d = decidedName?.trimmingCharacters(in: .whitespaces), !d.isEmpty { return d }
+        // EVERY FALLBACK BELOW IS THE ORIGINAL CHAIN, UNCHANGED, so an older server — or a row the
+        // server could decide nothing about — degrades to exactly what this app showed before
+        // rather than to a blank row.
         if let c = personCanonicalName?.trimmingCharacters(in: .whitespaces), !c.isEmpty { return c }
         let n = [firstName, lastName].compactMap { $0 }.joined(separator: " ").trimmingCharacters(in: .whitespaces)
         if !n.isEmpty { return n }
         if let nn = nickname, !nn.isEmpty { return nn }
         return "Unnamed"
     }
-    var subtitle: String { AnchorText.join([AnchorText.titleCase(relationshipType).nilIfEmpty,
+    // HIS WORD FOR THEM, FIRST IN THE SUBTITLE. The heading is their name and this sits beneath it —
+    // never one replacing the other. Shown only when it differs from the heading, so a person whose
+    // name IS what he calls them does not read "Ma · Ma".
+    var subtitle: String { AnchorText.join([familiarLabel,
+                                            AnchorText.titleCase(relationshipType).nilIfEmpty,
                                             AnchorText.titleCase(significance).nilIfEmpty,
                                             AnchorText.date(startDate)]) }
+    private var familiarLabel: String? {
+        guard let f = familiarName?.trimmingCharacters(in: .whitespaces), !f.isEmpty,
+              f != displayName else { return nil }
+        return "Known to you as \(f)"
+    }
     var sortKey: String { startDate ?? createdAt ?? "" }
     var typeLabel: String? { AnchorText.titleCase(relationshipType).nilIfEmpty }
     var story: String? { nbqResponse?.trimmingCharacters(in: .whitespaces).nilIfEmpty }
     var detailFields: [AnchorField] {
-        [ .init(label: "Nickname", value: nickname),
+        [ .init(label: "Known to you as", value: familiarLabel == nil ? nil : familiarName),
+          .init(label: "Nickname", value: nickname),
           .init(label: "Maiden name", value: maidenName),
           .init(label: "Relationship type", value: AnchorText.titleCase(relationshipType).nilIfEmpty),
           .init(label: "Significance", value: AnchorText.titleCase(significance).nilIfEmpty),
