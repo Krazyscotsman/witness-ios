@@ -94,6 +94,14 @@ nonisolated struct RelationshipRow: Decodable, AnchorRow {
     // `aunt_uncle_niece_nephew`, "Parent Child" for `parent_child`, "Siblings" for `siblings`.
     // Optional, so an older server falls back to exactly the previous behaviour.
     var relationshipLabel: String? = nil
+    // ⛔ AND WHAT THE PERSON IS TO HIM, which is a DIFFERENT question (2026-10-04). The line above
+    // is the name of the RELATIONSHIP, and `relationship_type` on the anchor row describes HIS
+    // relationship TO them — `pet_owner` means HE is the owner. The subtitle below put that bare
+    // under the row's name, so his cat read "Monkey · Pet Owner". Decided on the server
+    // (`anchor_vocabulary.subject_label`): his word for her when he gave one, else what the entity
+    // is ("Pet"), else the relationship. Optional, so an older server falls straight back to the
+    // previous behaviour.
+    var subjectLabel: String? = nil
     var familyRole: String? = nil, datePrecision: String? = nil
     // ⛔ `datePrecision` ABOVE IS ALWAYS NIL and has been for as long as the allowlist has existed:
     // `date_precision` described start AND end at once, was retired, and is NOT in the columns this
@@ -144,8 +152,15 @@ nonisolated struct RelationshipRow: Decodable, AnchorRow {
         relationshipLabel?.trimmingCharacters(in: .whitespaces).nilIfEmpty
             ?? AnchorText.titleCase(relationshipType).nilIfEmpty
     }
+    /// WHAT THEY ARE TO HIM — for the places a label stands bare under their name. Falls back to
+    /// `relTypeLabel`, which is what this app showed before, so an older server changes nothing.
+    /// The "Relationship type" DETAIL FIELD below deliberately keeps `relTypeLabel`: it is labelled,
+    /// so naming the relationship there is correct — it is only the unlabelled uses that were wrong.
+    var subjectTypeLabel: String? {
+        subjectLabel?.trimmingCharacters(in: .whitespaces).nilIfEmpty ?? relTypeLabel
+    }
     var subtitle: String { AnchorText.join([familiarLabel,
-                                            relTypeLabel,
+                                            subjectTypeLabel,
                                             AnchorText.titleCase(significance).nilIfEmpty,
                                             AnchorText.date(startDate, precision: startDatePrecision)]) }
     private var familiarLabel: String? {
@@ -154,7 +169,7 @@ nonisolated struct RelationshipRow: Decodable, AnchorRow {
         return "Known to you as \(f)"
     }
     var sortKey: String { startDate ?? createdAt ?? "" }
-    var typeLabel: String? { relTypeLabel }
+    var typeLabel: String? { subjectTypeLabel }
     var story: String? { nbqResponse?.trimmingCharacters(in: .whitespaces).nilIfEmpty }
     var detailFields: [AnchorField] {
         [ .init(label: "Known to you as", value: familiarLabel == nil ? nil : familiarName),
