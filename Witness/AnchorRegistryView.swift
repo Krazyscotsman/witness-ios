@@ -136,7 +136,10 @@ struct AnchorRelationshipsView: View {
                     } else {
                         ForEach(chips) { chip in
                             NavigationLink {
-                                RelationshipListView(title: chip.title, source: .type(key: chip.id, display: chip.title), vm: vm, auth: auth)
+                                // The heading shows the server's word; `display` feeds `prefillType`,
+                                // which is WRITTEN as `relationship_type`, so it keeps the form's own
+                                // spelling. See `RelChip` — one string used to do both jobs.
+                                RelationshipListView(title: chip.title, source: .type(key: chip.id, display: chip.formOption), vm: vm, auth: auth)
                             } label: { chipRow(chip) }.witnessPress()
                         }
                     }

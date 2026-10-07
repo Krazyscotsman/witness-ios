@@ -4,7 +4,8 @@ import Combine
 // MARK: - Graph data (GET /api/v1/graph). Read-only. Maps the response into the existing GNode/GEdge layout
 // models and feeds them into the hand-written force-directed engine via GraphLayout.setGraph(). Each node's
 // primaryRel (which drives RelBucket color/filter) is derived: anchor_rel_type → the relationship_type of its edge to
-// the narrator → its strongest incident edge → neutral. 404 → .unavailable (graceful). Fetch-once + refresh,
+// the narrator → its strongest incident edge → neutral. `narratorRel` is the SAME chain stopped before that third
+// rung, for anything that SAYS the word rather than colouring with it. 404 → .unavailable (graceful). Fetch-once + refresh,
 // 401→refresh→retry.
 @MainActor
 final class GraphViewModel: ObservableObject {
@@ -70,6 +71,12 @@ final class GraphViewModel: ObservableObject {
             }
         }
         for n in rawNodes { if let a = n.anchorRelType, !a.isEmpty { primary[n.id] = a } }
+        // ⛔ THE NARRATOR-RELATIVE WORD IS A SNAPSHOT TAKEN *BEFORE* THE THIRD RUNG (2026-10-07).
+        // Everything in `primary` so far came either from the node's own anchor row or from an edge
+        // with HIM at one end, so every value is genuinely a word about him. The rung below widens
+        // it to ANY incident edge, which is sound for a colour and false as a caption — so the
+        // honest set is copied out here, and only `primary` goes on to be widened.
+        let narratorOnly = primary
         for n in rawNodes where primary[n.id] == nil {
             if let e = mappedEdges.first(where: { $0.source == n.id || $0.target == n.id }) { primary[n.id] = e.relType }
         }
@@ -82,7 +89,12 @@ final class GraphViewModel: ObservableObject {
                   isNarrator: n.isNarrator ?? false,
                   memoryCount: n.memoryCount ?? 0,
                   aliases: n.aliases ?? [],
-                  born: n.birthDate, died: n.deathDate)
+                  born: n.birthDate, died: n.deathDate,
+                  // "self" for him, exactly as `primaryRel` does: his own card captioned "Self"
+                  // before this change and the server sends him no subject_label (measured: ''),
+                  // so without this the fix would quietly delete a caption that was never wrong.
+                  narratorRel: (n.isNarrator == true) ? "self" : (narratorOnly[n.id] ?? ""),
+                  subjectLabel: n.subjectLabel)
         }
 
         nodes = mappedNodes

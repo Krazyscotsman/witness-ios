@@ -85,7 +85,24 @@ struct NodeDetailSheet: View {
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(node.label).font(.serif(24)).foregroundStyle(WT.ink)
-                Text(humanize(node.primaryRel)).font(.system(size: 13)).foregroundStyle(WT.ink.opacity(0.55))
+                // ⛔ WHAT THEY ARE TO HIM — OR NOTHING (2026-10-07).
+                //
+                // This read `humanize(node.primaryRel)`, and `primaryRel` names the RELATIONSHIP:
+                // for `pet_owner` that describes HIM, so his cat's card read "Monkey · Pet Owner".
+                // The identical defect was fixed on the anchors list on 2026-10-04 by reading the
+                // server's `subject_label`; this surface was never swept. Measured against v2, all
+                // five nodes with a word disagreed with the server — Mother / Pet / Step-Dad /
+                // Grandmother / Grandfather, against Parent Child / Pet Owner / Step Parent /
+                // Grandparent Grandchild.
+                //
+                // And `primaryRel`'s last rung is ANY incident edge, so a person linked only to his
+                // mother would have been captioned "Parent Child" — a claim about HIM that nobody
+                // made. `narratorRel` is the same chain stopped before that rung, so such a node
+                // now says nothing. The avatar below still colours from `primaryRel`: guessing a
+                // colour is harmless, speaking the guess is not.
+                if let w = subjectWord {
+                    Text(w).font(.system(size: 13)).foregroundStyle(WT.ink.opacity(0.55))
+                }
             }
             Spacer()
             if node.isAnchor {
@@ -111,8 +128,12 @@ struct NodeDetailSheet: View {
     private var showMoreLink: some View {
         NavigationLink {
             EntityDetailPage(entityId: node.id,
+                             // The seed is RENDERED by EntityDetailPage as a kicker under the name
+                             // (`humanize(relationship)`), so it carries the same risk as the caption
+                             // above and must be the narrator-relative word — or nil, which lets the
+                             // page fall through to its own `relationship_type` read as before.
                              seed: EntitySeed(name: node.label, type: nil, isAnchor: node.isAnchor,
-                                              relationship: node.primaryRel),
+                                              relationship: node.narratorRel.isEmpty ? nil : node.narratorRel),
                              auth: auth)
         } label: {
             HStack(spacing: 6) {
@@ -184,4 +205,12 @@ struct NodeDetailSheet: View {
         HStack { Text(l).font(.system(size: 14)).foregroundStyle(WT.ink.opacity(0.55)); Spacer(); Text(v).font(.system(size: 15, weight: .medium)).foregroundStyle(WT.ink) }.frame(height: 46)
     }
     private func humanize(_ s: String) -> String { s.split(separator: "_").map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined(separator: " ") }
+
+    /// The server's word for what this person is to him; else this app's own title-casing of a
+    /// word that is genuinely ABOUT him; else nothing at all. One accessor, so the caption and the
+    /// seed handed to `EntityDetailPage` cannot drift apart the way the surfaces did.
+    private var subjectWord: String? {
+        if let s = node.subjectLabel?.trimmingCharacters(in: .whitespaces), !s.isEmpty { return s }
+        return node.narratorRel.isEmpty ? nil : humanize(node.narratorRel)
+    }
 }

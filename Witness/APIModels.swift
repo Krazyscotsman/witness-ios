@@ -801,6 +801,14 @@ nonisolated struct GraphNode: Decodable {
     let aliases: [String]?
     let nameComplete: Bool?    // ⚠️ backend sends a BOOL (name_complete: true), NOT a string
     let anchorRelType: String?
+    // ⛔ WHAT THE NODE IS TO HIM, decided on the server (`anchor_vocabulary.subject_label`), and
+    // ALREADY ON THE WIRE since 2026-10-04 — this struct simply never decoded it. `anchorRelType`
+    // above is the type of the RELATIONSHIP, and for `pet_owner` that describes HIM: the graph's
+    // node card printed it under the cat's name and read "Monkey · Pet Owner". This is the same
+    // field `RelationshipRow.subjectLabel` already decodes for the anchors list, which was fixed
+    // on 2026-10-04; the graph surface was not swept at the time.
+    // Optional, so a deployed server that does not send it falls back to exactly the old behaviour.
+    let subjectLabel: String?
     let birthDate: String?
     let deathDate: String?
     let color: String?

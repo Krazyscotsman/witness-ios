@@ -292,6 +292,19 @@ struct GNode: Identifiable, Equatable {
     let aliases: [String]
     let born: String?
     let died: String?
+    // ⛔ TWO FIELDS, BECAUSE THE COLOUR AND THE WORD ARE NOT THE SAME QUESTION (2026-10-07).
+    //
+    // `primaryRel` above is derived through three rungs — anchor_rel_type → the type of an edge to
+    // the NARRATOR → ANY incident edge — and that third rung is fine for picking a colour but must
+    // never be spoken: a person whose only link is to his mother would be captioned "Parent Child"
+    // under their own name, asserting a relationship to HIM that nobody stated.
+    //
+    // `narratorRel` is the same derivation STOPPED AFTER RUNG TWO: it is empty unless the word is
+    // genuinely about the narrator. A caption reads this; the palette keeps reading `primaryRel`.
+    var narratorRel: String = ""
+    /// The server's own word for what this person is TO HIM. nil on an older server → callers fall
+    /// back to `narratorRel`, which is what they showed before.
+    var subjectLabel: String? = nil
     var pos: CGPoint = .zero
     var vel: CGVector = .zero
     var pinned: Bool = false

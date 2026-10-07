@@ -56,6 +56,16 @@ enum GraphClassify {
         "acquaintance":"Acquaintance","neighbor":"Neighbor","professional":"Professional","pet_owner":"Pet",
     ]
     static func compactRelType(_ relType: String) -> String { compact[relType.lowercased()] ?? AnchorText.titleCase(relType) }
+    /// ⛔ THE SERVER'S WORD FOR THE SUBJECT, else this app's compact word (2026-10-07).
+    /// `compactRelType` above names the RELATIONSHIP — "Grandparent" for `grandparent_grandchild` —
+    /// where the server names the PERSON: "Grandmother". It is the same decision the anchors list
+    /// was moved onto on 2026-10-04 (`RelationshipRow.subjectLabel`), and the rows carrying it are
+    /// already passed into `EgoLayout.compute`; this ring just never read them.
+    /// Falls back to EXACTLY the previous label when the deployed server sends nothing.
+    static func subjectWord(_ served: String?, fallbackType: String) -> String {
+        let s = (served ?? "").trimmingCharacters(in: .whitespaces)
+        return s.isEmpty ? compactRelType(fallbackType) : s
+    }
     static func significanceRank(_ s: String?) -> Int {
         switch (s ?? "").lowercased() { case "critical": return 0; case "high": return 1; case "moderate": return 2; case "low": return 3; default: return 4 }
     }
@@ -127,10 +137,13 @@ enum EgoLayout {
                 let rel = a.relationshipType ?? "other"
                 guard let cat = GraphClassify.anchorCategory(rel), filters.contains(cat) else { continue }
                 let nid = a.personEntityId ?? a.id
+                // A stand-in for somebody the graph has no node for. `rel` came off the ANCHOR ROW, so
+                // it is narrator-relative by construction and safe to speak as well as colour with.
                 let node = nodeByID[nid] ?? GNode(id: nid, label: a.displayName, primaryRel: rel,
-                                                  isAnchor: true, isNarrator: false, memoryCount: 0, aliases: [], born: nil, died: nil)
+                                                  isAnchor: true, isNarrator: false, memoryCount: 0, aliases: [], born: nil, died: nil,
+                                                  narratorRel: rel, subjectLabel: a.subjectLabel)
                 let cand = Cand(id: nid, name: node.label.isEmpty ? a.displayName : node.label,
-                                rel: GraphClassify.compactRelType(rel), cat: cat, node: node,
+                                rel: GraphClassify.subjectWord(a.subjectLabel, fallbackType: rel), cat: cat, node: node,
                                 mc: node.memoryCount, sig: GraphClassify.significanceRank(a.significance))
                 if let e = best[nid], e.sig <= cand.sig { continue }        // dedupe by id, keep top significance
                 best[nid] = cand

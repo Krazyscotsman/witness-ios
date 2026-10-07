@@ -225,6 +225,26 @@ struct EntityDetailPage: View {
     private var isAnchor: Bool { vm.detail?.isAnchor ?? seed.isAnchor ?? false }
     private var relationship: String? { vm.derivedRelationship ?? seed.relationship ?? vm.attrString("relationship_type") }
 
+    /// ⛔ THE SERVER'S WORD, ALREADY IN THIS PAGE'S OWN PAYLOAD (2026-10-07).
+    ///
+    /// The kicker under the name was `humanize(relationship)` for all three of its rungs — two of which
+    /// read a raw `relationship_type` and title-cased it here. `/api/v1/entities/{id}` has merged
+    /// `subject_label` and `relationship_label` into `attributes` since the same change that fixed the
+    /// anchors list; this page was already calling `attrString("relationship_type")` and the decided
+    /// words were sitting in the same bag, one key away.
+    ///
+    /// `subject_label` first because this sits under a PERSON'S NAME — what they are to him beats what
+    /// the relationship is called, which is the distinction that had his cat reading "Pet Owner".
+    /// A served word is NOT re-humanised: it is already a sentence. The last rung is the old chain
+    /// unchanged, so a server that sends neither renders exactly what it rendered before.
+    private var relationshipKicker: String? {
+        for served in [vm.attrString("subject_label"), vm.attrString("relationship_label")] {
+            if let s = served?.trimmingCharacters(in: .whitespaces), !s.isEmpty { return s }
+        }
+        guard let r = relationship, !r.isEmpty else { return nil }
+        return humanize(r)
+    }
+
     var body: some View {
         ZStack(alignment: .top) {
             ParchmentBackground()
@@ -274,7 +294,7 @@ struct EntityDetailPage: View {
                 kicker("Entity Detail", tone: WV.gold)
                 if let t = type, !t.isEmpty { kicker(t.capitalized, tone: WV.teal) }
                 if isAnchor { kicker("Anchor", tone: WV.gold) }
-                if let r = relationship, !r.isEmpty { kicker(humanize(r), tone: WV.teal) }
+                if let r = relationshipKicker { kicker(r, tone: WV.teal) }
             }
             Text(name).font(.serif(30)).foregroundStyle(WT.ink).fixedSize(horizontal: false, vertical: true)
             FlowLayout(spacing: 8, lineSpacing: 8) {

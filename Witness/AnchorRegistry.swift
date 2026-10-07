@@ -429,14 +429,29 @@ final class AnchorRegistryViewModel: ObservableObject {
         default: return 0
         }
     }
-    struct RelChip: Identifiable { let id: String; let title: String; let count: Int }  // id = normalized key
+    /// ⛔ THREE STRINGS, AND ONLY ONE OF THEM IS READ BY A PERSON (2026-10-07).
+    ///
+    /// The chips read "Parent Child" and "Grandparent Grandchild" directly above rows that read
+    /// "Mother" and "Grandmother" — this struct had `relTypeLabel` six lines up and did not use it.
+    /// But the one string did three jobs, and the other two must NOT change:
+    ///   · `id` is the grouping key `relationships(typeKey:)` matches on (`AnchorText.key`), so it stays
+    ///     derived from the RAW type or the drill-down silently returns nothing;
+    ///   · `formOption` is what the Add-person form PREFILLS, and `RelationshipVocab.types` is spelled in
+    ///     exactly this title-cased form — the server's "Parent/Child" matches no option in that list,
+    ///     and `prefillType` is written straight to `relationship_type` on save. A display change must
+    ///     not reach a write.
+    ///   · `title` is the only one anybody reads, so it is the only one that becomes the server's word.
+    struct RelChip: Identifiable { let id: String; let title: String; let formOption: String; let count: Int }
     var relationshipChips: [RelChip] {
-        var map: [String: (title: String, count: Int)] = [:]
+        var map: [String: (title: String, formOption: String, count: Int)] = [:]
         for r in relationships {
-            let title = AnchorText.titleCase(r.relationshipType); guard !title.isEmpty else { continue }
-            map[title.lowercased(), default: (title, 0)].count += 1
+            let option = AnchorText.titleCase(r.relationshipType); guard !option.isEmpty else { continue }
+            // `relTypeLabel` is the server's curated name for the relationship, else this same
+            // title-casing — so a server that sends nothing leaves every chip exactly as it was.
+            map[option.lowercased(), default: (r.relTypeLabel ?? option, option, 0)].count += 1
         }
-        return map.map { RelChip(id: $0.key, title: $0.value.title, count: $0.value.count) }.sorted { $0.title < $1.title }
+        return map.map { RelChip(id: $0.key, title: $0.value.title, formOption: $0.value.formOption, count: $0.value.count) }
+            .sorted { $0.title < $1.title }
     }
     var criticalPeople: [RelationshipRow] { relationships.filter { AnchorText.key($0.significance) == "critical" } }
     func relationships(typeKey: String) -> [RelationshipRow] { relationships.filter { AnchorText.key($0.relationshipType) == typeKey } }
